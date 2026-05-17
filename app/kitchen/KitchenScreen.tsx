@@ -10,6 +10,8 @@ type OrderRow = {
   status: string;
   total: number;
   items: { id?: string; name: string; price: number; qty: number; image?: string }[];
+  customer_name?: string | null;
+  completed_at?: string | null;
 };
 
 type MenuCatalogItem = {
@@ -654,7 +656,7 @@ export function KitchenScreen() {
     if (isUpdating.current) return;
 
     // Read-only fetch: never INSERT/UPDATE/DELETE order rows here (no accidental status changes).
-    let q = supabase.from("orders").select("id, order_number, created_at, status, total, items");
+    let q = supabase.from("orders").select("id, order_number, created_at, status, total, items, customer_name, completed_at");
 
     if (listView === "pending") {
       q = q
@@ -667,6 +669,7 @@ export function KitchenScreen() {
         .eq("status", "ready")
         .gte("created_at", startIso)
         .lt("created_at", endExclusiveIso)
+        .order("completed_at", { ascending: false, nullsFirst: false })
         .order("created_at", { ascending: false });
     }
 
@@ -760,7 +763,11 @@ export function KitchenScreen() {
     }
 
     setBusyId(id);
-    const { error } = await supabase.from("orders").update({ status: "ready" }).eq("id", id);
+    const completedAt = new Date().toISOString();
+    const { error } = await supabase
+      .from("orders")
+      .update({ status: "ready", completed_at: completedAt })
+      .eq("id", id);
     setBusyId(null);
 
     if (error) {
@@ -770,11 +777,15 @@ export function KitchenScreen() {
       return;
     }
 
+    const readyRow: OrderRow = { ...row, status: "ready", completed_at: completedAt };
+
     setPendingOrders((prev) => {
       const next = prev.filter((o) => o.id !== id);
       prevPendingIdsRef.current = new Set(next.filter((o) => o.id).map((o) => String(o.id)));
       return next;
     });
+
+    setCompletedOrders((prev) => [readyRow, ...prev.filter((o) => o.id !== id)]);
 
     isUpdating.current = false;
 
@@ -1273,6 +1284,19 @@ export function KitchenScreen() {
                     >
                       {formatTime(o.created_at)}
                     </div>
+                    {typeof o.customer_name === "string" && o.customer_name.trim() ? (
+                      <div
+                        style={{
+                          fontSize: 20,
+                          fontWeight: 800,
+                          fontFamily: "Georgia, 'Times New Roman', serif",
+                          color: isDone ? "#D97706" : PAGE.amberPill,
+                          marginTop: 8,
+                        }}
+                      >
+                        For: {o.customer_name.trim()}
+                      </div>
+                    ) : null}
                   </div>
                 </div>
 
