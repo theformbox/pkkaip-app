@@ -1,5 +1,8 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
+import Cropper from "react-easy-crop";
+import "react-easy-crop/react-easy-crop.css";
 import QRCode from "qrcode";
+import html2canvas from "html2canvas";
 import { supabase } from "@/lib/supabase";
 
 // ── Palette ────────────────────────────────────────────────────
@@ -368,17 +371,83 @@ function GardenScreen({ onBack, plants }) {
 }
 
 // ══════════════════════════════════════════════════════════════
+// IMAGE PICKER — crop helpers (react-easy-crop)
+// ══════════════════════════════════════════════════════════════
+
+function createImage(url) {
+  return new Promise((resolve, reject) => {
+    const image = new Image();
+    image.addEventListener("load", () => resolve(image));
+    image.addEventListener("error", (err) => reject(err));
+    if (String(url).startsWith("http://") || String(url).startsWith("https://")) {
+      image.crossOrigin = "anonymous";
+    }
+    image.src = url;
+  });
+}
+
+async function getCroppedImgDataUrl(imageSrc, pixelCrop) {
+  if (!pixelCrop || pixelCrop.width < 1 || pixelCrop.height < 1) {
+    throw new Error("Invalid crop");
+  }
+  const image = await createImage(imageSrc);
+  const canvas = document.createElement("canvas");
+  const ctx = canvas.getContext("2d");
+  if (!ctx) throw new Error("No canvas context");
+  canvas.width = pixelCrop.width;
+  canvas.height = pixelCrop.height;
+  ctx.drawImage(
+    image,
+    pixelCrop.x,
+    pixelCrop.y,
+    pixelCrop.width,
+    pixelCrop.height,
+    0,
+    0,
+    pixelCrop.width,
+    pixelCrop.height
+  );
+  return canvas.toDataURL("image/png");
+}
+
+// ══════════════════════════════════════════════════════════════
 // IMAGE PICKER
 // ══════════════════════════════════════════════════════════════
 
-function ImagePicker({ searchLabel, unsplashQuery, onSelect, onClose }) {
+function ImagePicker({ searchLabel, unsplashQuery, aspectRatio = 1, onSelect, onClose }) {
+  const [phase, setPhase] = useState("pick");
+  const [cropSrc, setCropSrc] = useState(null);
+  const [crop, setCrop] = useState({ x: 0, y: 0 });
+  const [zoom, setZoom] = useState(1);
+  const [croppedAreaPixels, setCroppedAreaPixels] = useState(null);
+  const [cropBusy, setCropBusy] = useState(false);
+
   const [images, setImages] = useState(null);
-  const [selected, setSelected] = useState(null);
   const [customUrl, setCustomUrl] = useState("");
   const [loadedMap, setLoadedMap] = useState({});
   const fileRef = useRef(null);
 
   const displayName = searchLabel?.trim() || "this";
+
+  const onCropComplete = useCallback((_, croppedPixels) => {
+    setCroppedAreaPixels(croppedPixels);
+  }, []);
+
+  const openCrop = (src) => {
+    setCropSrc(src);
+    setPhase("crop");
+    setCrop({ x: 0, y: 0 });
+    setZoom(1);
+    setCroppedAreaPixels(null);
+  };
+
+  const backToPick = () => {
+    setPhase("pick");
+    setCropSrc(null);
+    setCrop({ x: 0, y: 0 });
+    setZoom(1);
+    setCroppedAreaPixels(null);
+  };
 
   const handleFile = (e) => {
     const file = e.target.files?.[0];
@@ -387,12 +456,26 @@ function ImagePicker({ searchLabel, unsplashQuery, onSelect, onClose }) {
     reader.onload = (ev) => {
       const dataUrl = ev.target?.result;
       if (typeof dataUrl === "string") {
-        setCustomUrl(dataUrl);
-        setSelected(null);
+        setCustomUrl("");
+        openCrop(dataUrl);
       }
     };
     reader.readAsDataURL(file);
     e.target.value = "";
+  };
+
+  const handleCropUse = async () => {
+    if (!cropSrc || !croppedAreaPixels) return;
+    setCropBusy(true);
+    try {
+      const dataUrl = await getCroppedImgDataUrl(cropSrc, croppedAreaPixels);
+      onSelect(dataUrl);
+    } catch (err) {
+      console.error(err);
+      alert("Could not crop this image. Try another photo or URL.");
+    } finally {
+      setCropBusy(false);
+    }
   };
 
   useEffect(() => {
@@ -413,7 +496,8 @@ function ImagePicker({ searchLabel, unsplashQuery, onSelect, onClose }) {
     const ac = new AbortController();
     setImages(null);
     setLoadedMap({});
-    setSelected(null);
+    setPhase("pick");
+    setCropSrc(null);
 
     (async () => {
       try {
@@ -444,7 +528,46 @@ function ImagePicker({ searchLabel, unsplashQuery, onSelect, onClose }) {
       ? Array.from({ length: 9 }, () => null)
       : [...images, ...Array(Math.max(0, 9 - images.length)).fill(null)].slice(0, 9);
 
-  const chosen = customUrl || selected;
+  const chosen = customUrl.trim();
+
+  if (phase === "crop" && cropSrc) {
+    return (
+      <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.65)", zIndex: 100, display: "flex", flexDirection: "column", justifyContent: "flex-end" }}>
+        <div style={{ background: G.white, borderRadius: "20px 20px 0 0", padding: 20, maxHeight: "90vh", overflow: "hidden", display: "flex", flexDirection: "column" }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+            <button type="button" onClick={backToPick} style={{ background: "none", border: "none", color: G.green, fontSize: 15, fontWeight: "bold", cursor: "pointer", fontFamily: "Georgia,serif", textDecoration: "underline", padding: 0 }}>
+              Back
+            </button>
+            <div style={{ fontSize: 16, fontWeight: "bold", fontFamily: "Georgia,serif", color: G.text }}>Crop photo</div>
+            <button type="button" onClick={onClose} style={{ background: G.greenPale, border: "none", borderRadius: 8, padding: "4px 10px", cursor: "pointer", color: G.green, fontWeight: "bold", fontSize: 16 }}>✕</button>
+          </div>
+          <div style={{ position: "relative", width: "100%", flex: 1, minHeight: 280, maxHeight: "56vh", background: "#1a1a1a", borderRadius: 12, overflow: "hidden" }}>
+            <Cropper
+              image={cropSrc}
+              crop={crop}
+              zoom={zoom}
+              aspect={aspectRatio}
+              onCropChange={setCrop}
+              onZoomChange={setZoom}
+              onCropComplete={onCropComplete}
+            />
+          </div>
+          <div style={{ fontSize: 11, color: G.textLight, fontStyle: "italic", textAlign: "center", marginTop: 10, marginBottom: 6 }}>Pinch or use scroll to zoom · drag to reposition</div>
+          <input
+            type="range"
+            min={1}
+            max={3}
+            step={0.01}
+            value={zoom}
+            onChange={(e) => setZoom(Number(e.target.value))}
+            style={{ width: "100%", marginBottom: 14, accentColor: G.green }}
+          />
+          <ActionBtn label={cropBusy ? "Working…" : "Crop & Use"} color={!croppedAreaPixels || cropBusy ? G.brownLight : G.green} onClick={() => { if (!croppedAreaPixels || cropBusy) return; handleCropUse(); }} />
+          <ActionBtn label="Cancel" outline onClick={onClose} />
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.65)", zIndex: 100, display: "flex", flexDirection: "column", justifyContent: "flex-end" }}>
@@ -457,7 +580,7 @@ function ImagePicker({ searchLabel, unsplashQuery, onSelect, onClose }) {
         `}</style>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
           <div style={{ fontSize: 16, fontWeight: "bold", fontFamily: "Georgia,serif", color: G.text }}>Choose a Photo</div>
-          <button onClick={onClose} style={{ background: G.greenPale, border: "none", borderRadius: 8, padding: "4px 10px", cursor: "pointer", color: G.green, fontWeight: "bold", fontSize: 16 }}>✕</button>
+          <button type="button" onClick={onClose} style={{ background: G.greenPale, border: "none", borderRadius: 8, padding: "4px 10px", cursor: "pointer", color: G.green, fontWeight: "bold", fontSize: 16 }}>✕</button>
         </div>
         <div style={{ fontSize: 12, color: G.textLight, fontStyle: "italic", marginBottom: images === null ? 6 : 14 }}>Showing photos for "{displayName}" — tap one to select</div>
         {images === null && (
@@ -480,14 +603,13 @@ function ImagePicker({ searchLabel, unsplashQuery, onSelect, onClose }) {
               />
             ))
             : slots.map((url, i) => (
-              <div key={url ?? `slot-${i}`} onClick={() => { if (url) { setSelected(url); setCustomUrl(""); } }} style={{ aspectRatio: "1", borderRadius: 12, overflow: "hidden", border: url && selected === url && !customUrl ? `3px solid ${G.green}` : "3px solid transparent", cursor: url ? "pointer" : "default", position: "relative", background: G.greenPale, opacity: url ? 1 : 0.85 }}>
+              <div key={url ?? `slot-${i}`} onClick={() => url && openCrop(url)} style={{ aspectRatio: "1", borderRadius: 12, overflow: "hidden", border: "3px solid transparent", cursor: url ? "pointer" : "default", position: "relative", background: G.greenPale, opacity: url ? 1 : 0.85 }}>
                 {url && (
                   <img src={url} alt="" style={{ width: "100%", height: "100%", objectFit: "cover", display: loadedMap[i] ? "block" : "none" }}
                     onLoad={() => setLoadedMap(m => ({ ...m, [i]: true }))}
                   />
                 )}
                 {(!url || !loadedMap[i]) && <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 28 }}>🌿</div>}
-                {url && selected === url && !customUrl && <div style={{ position: "absolute", top: 4, right: 4, background: G.green, borderRadius: "50%", width: 22, height: 22, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 13, color: G.white, fontWeight: "bold" }}>✓</div>}
               </div>
             ))}
         </div>
@@ -499,15 +621,15 @@ function ImagePicker({ searchLabel, unsplashQuery, onSelect, onClose }) {
 
         <div style={{ borderTop: `1px dashed ${G.greenPale}`, marginBottom: 14 }} />
         <div style={{ fontSize: 12, color: G.textLight, marginBottom: 6, fontStyle: "italic" }}>Or paste your own image link:</div>
-        <input style={{ ...inp, marginBottom: 16 }} value={customUrl} onChange={e => { setCustomUrl(e.target.value); setSelected(null); }} placeholder="https://example.com/photo.jpg" />
+        <input style={{ ...inp, marginBottom: 16 }} value={customUrl} onChange={e => setCustomUrl(e.target.value)} placeholder="https://example.com/photo.jpg" />
 
-        {chosen && (
+        {chosen ? (
           <div style={{ marginBottom: 14 }}>
             <div style={{ fontSize: 12, color: G.textLight, marginBottom: 6 }}>Preview:</div>
             <img src={chosen} alt="preview" style={{ width: "100%", height: 140, objectFit: "cover", borderRadius: 12, border: `2px solid ${G.greenPale}` }} onError={e => e.target.style.opacity = 0.2} />
           </div>
-        )}
-        <ActionBtn label={chosen ? "✓ Use This Photo" : "Select a photo first"} color={chosen ? G.green : G.brownLight} onClick={() => chosen && onSelect(chosen)} />
+        ) : null}
+        <ActionBtn label={chosen ? "Continue to crop" : "Select a photo first"} color={chosen ? G.green : G.brownLight} onClick={() => chosen && openCrop(chosen)} />
         <ActionBtn label="Cancel" outline onClick={onClose} />
       </div>
     </div>
@@ -519,31 +641,85 @@ function ImagePicker({ searchLabel, unsplashQuery, onSelect, onClose }) {
 // ══════════════════════════════════════════════════════════════
 
 function QRModal({ plant, onClose }) {
-  const url = `${window.location.origin}${window.location.pathname}?plant=${plant.id}`;
+  const plantPageUrl = `https://pkkaip.com/?plant=${plant.id}`;
   const [qrDataUrl, setQrDataUrl] = useState(null);
+  const [saveImg, setSaveImg] = useState(null);
+  const printRef = useRef(null);
 
   useEffect(() => {
     let cancelled = false;
-    QRCode.toDataURL(url, { width: 300, margin: 2 })
+    QRCode.toDataURL(plantPageUrl, { width: 300, margin: 2 })
       .then((dataUrl) => {
         if (!cancelled) setQrDataUrl(dataUrl);
       })
       .catch((err) => console.error(err));
     return () => { cancelled = true; };
-  }, [url]);
+  }, [plantPageUrl]);
+
+  useEffect(() => {
+    if (!qrDataUrl) {
+      setSaveImg(null);
+      return;
+    }
+    let cancelled = false;
+    const t = setTimeout(() => {
+      const el = printRef.current;
+      if (!el || cancelled) return;
+      html2canvas(el, {
+        scale: 2,
+        backgroundColor: "#ffffff",
+        logging: false,
+      })
+        .then((canvas) => {
+          if (!cancelled) setSaveImg(canvas.toDataURL("image/png"));
+        })
+        .catch((err) => console.error(err));
+    }, 150);
+    return () => {
+      cancelled = true;
+      clearTimeout(t);
+    };
+  }, [qrDataUrl, plant.name, plant.malay]);
 
   return (
     <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.65)", zIndex: 100, display: "flex", alignItems: "center", justifyContent: "center", padding: 24 }}>
       <div style={{ background: G.white, borderRadius: 24, padding: 28, textAlign: "center", width: "100%", maxWidth: 340 }}>
-        {qrDataUrl
-          ? <img src={qrDataUrl} alt="QR Code" style={{ width: 200, height: 200, border: `4px solid ${G.greenPale}`, borderRadius: 16, marginBottom: 16, objectFit: "contain" }} />
-          : <div style={{ width: 200, height: 200, margin: "0 auto", marginBottom: 16, display: "flex", alignItems: "center", justifyContent: "center", border: `4px solid ${G.greenPale}`, borderRadius: 16, background: G.greenPale, color: G.green, fontSize: 14, fontStyle: "italic" }}>Loading QR…</div>}
-        <div style={{ fontSize: 22, fontWeight: "bold", color: G.green, fontFamily: "Georgia,serif", lineHeight: 1.2, marginBottom: plant.malay ? 6 : 8, WebkitPrintColorAdjust: "exact", printColorAdjust: "exact" }}>{plant.name}</div>
-        {plant.malay ? <div style={{ fontSize: 15, color: G.brownLight, fontStyle: "italic", fontFamily: "Georgia,serif", lineHeight: 1.35, marginBottom: 10, WebkitPrintColorAdjust: "exact", printColorAdjust: "exact" }}>{plant.malay}</div> : null}
-        <div style={{ fontSize: 12, color: G.textLight, fontStyle: "italic", marginBottom: 14, fontFamily: "Georgia,serif" }}>Scan to learn more 🌿</div>
-        <div style={{ fontSize: 11, color: G.textLight, marginBottom: 6, wordBreak: "break-all" }}>{url}</div>
-        <div style={{ fontSize: 12, color: G.green, fontStyle: "italic", marginBottom: 20 }}>📸 Screenshot this to print the QR sticker</div>
+        <div style={{ display: "inline-block", position: "relative", maxWidth: "100%", verticalAlign: "top", marginBottom: 8 }}>
+          {qrDataUrl ? (
+            <>
+              <div ref={printRef} aria-hidden={saveImg ? true : undefined} style={{ textAlign: "center", padding: "0 4px", boxSizing: "border-box" }}>
+                <img src={qrDataUrl} alt="" style={{ width: 200, height: 200, border: `4px solid ${G.greenPale}`, borderRadius: 16, marginBottom: 16, objectFit: "contain", display: "block", marginLeft: "auto", marginRight: "auto" }} />
+                <div style={{ fontSize: 22, fontWeight: "bold", color: G.green, fontFamily: "Georgia,serif", lineHeight: 1.2, marginBottom: plant.malay ? 6 : 8, WebkitPrintColorAdjust: "exact", printColorAdjust: "exact" }}>{plant.name}</div>
+                {plant.malay ? <div style={{ fontSize: 15, color: G.brownLight, fontStyle: "italic", fontFamily: "Georgia,serif", lineHeight: 1.35, marginBottom: 10, WebkitPrintColorAdjust: "exact", printColorAdjust: "exact" }}>{plant.malay}</div> : null}
+                <div style={{ fontSize: 12, color: G.textLight, fontStyle: "italic", marginBottom: 0, fontFamily: "Georgia,serif" }}>Scan to learn more 🌿</div>
+              </div>
+              {saveImg ? (
+                <img
+                  src={saveImg}
+                  alt={`${plant.name} — QR`}
+                  style={{
+                    position: "absolute",
+                    left: 0,
+                    top: 0,
+                    width: "100%",
+                    height: "100%",
+                    objectFit: "contain",
+                    zIndex: 1,
+                    WebkitTouchCallout: "default",
+                  }}
+                />
+              ) : null}
+            </>
+          ) : (
+            <div style={{ width: 200, height: 200, margin: "0 auto", display: "flex", alignItems: "center", justifyContent: "center", border: `4px solid ${G.greenPale}`, borderRadius: 16, background: G.greenPale, color: G.green, fontSize: 14, fontStyle: "italic" }}>Loading QR…</div>
+          )}
+        </div>
         <ActionBtn label="Close" outline onClick={onClose} />
+        <div style={{ fontSize: 10, color: G.textLight, fontStyle: "italic", marginTop: 16, lineHeight: 1.5, textAlign: "center", fontFamily: "Georgia,serif", wordBreak: "break-all" }}>
+          <div>Hold down on the image to save</div>
+          <div style={{ marginTop: 10 }}>{plantPageUrl}</div>
+          <div style={{ marginTop: 10 }}>📸 Screenshot this to print the QR sticker</div>
+        </div>
       </div>
     </div>
   );
@@ -592,6 +768,7 @@ function PlantAdmin({ plants, setPlants, onBack }) {
       {showPicker && (
         <ImagePicker
           searchLabel={form.name || "plant"}
+          aspectRatio={16 / 9}
           onSelect={url => { setForm(f => ({ ...f, image: url })); setShowPicker(false); }}
           onClose={() => setShowPicker(false)}
         />
@@ -747,6 +924,7 @@ function MenuAdmin({ categories, setCategories, onBack }) {
         <ImagePicker
           searchLabel={itemForm.name || "food"}
           unsplashQuery={itemForm.name.trim() || "food"}
+          aspectRatio={1}
           onSelect={url => { setItemForm(f => ({ ...f, image: url })); setShowPicker(false); }}
           onClose={() => setShowPicker(false)}
         />
@@ -937,6 +1115,9 @@ export default function App() {
   const [categories, setCategories] = useState([]);
   const [plants, setPlants] = useState([]);
   const [logo, setLogo] = useState(null); // null = use built-in logo
+  const [qrLanding, setQrLanding] = useState(() =>
+    typeof window !== "undefined" && Boolean(new URLSearchParams(window.location.search).get("plant"))
+  );
 
   useEffect(() => {
     let cancelled = false;
@@ -962,16 +1143,33 @@ export default function App() {
     return () => { cancelled = true; };
   }, []);
 
+  useEffect(() => {
+    if (bootLoading) return;
+    const id = new URLSearchParams(window.location.search).get("plant");
+    if (!id) {
+      setQrLanding(false);
+      return;
+    }
+    setQrLanding(plants.some(p => String(p.id) === id));
+  }, [bootLoading, plants]);
+
   if (bootLoading) return <LoadingScreen />;
 
-  // QR scan landing: if URL has ?plant=ID, show that plant
   const params = new URLSearchParams(window.location.search);
   const plantId = params.get("plant");
-  if (plantId) {
-    const plant = plants.find(p => String(p.id) === plantId);
-    if (plant) return (
+  const qrPlant = plantId ? plants.find(p => String(p.id) === plantId) : null;
+
+  if (qrLanding && qrPlant) {
+    return (
       <div style={{ fontFamily: "Georgia,serif", background: G.cream, minHeight: "100vh", maxWidth: 430, margin: "0 auto" }}>
-        <PlantCard plant={plant} onBack={() => window.history.back()} />
+        <PlantCard
+          plant={qrPlant}
+          onBack={() => {
+            setQrLanding(false);
+            setScreen("garden");
+            window.history.replaceState({}, "", "/");
+          }}
+        />
       </div>
     );
   }
