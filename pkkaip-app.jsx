@@ -160,6 +160,50 @@ function HomeScreen({ onNav, logo }) {
 }
 
 // ══════════════════════════════════════════════════════════════
+// CAFÉ — persist orders
+// ══════════════════════════════════════════════════════════════
+
+function buildOrderItemsForSupabase(orderItems) {
+  return orderItems.map((i) => ({
+    name: i.name,
+    price: i.price,
+    qty: i.qty,
+    image: i.image || "",
+  }));
+}
+
+async function getNextOrderNumberForToday() {
+  const start = new Date();
+  start.setHours(0, 0, 0, 0);
+  const { count, error } = await supabase
+    .from("orders")
+    .select("*", { count: "exact", head: true })
+    .gte("created_at", start.toISOString());
+  if (error) {
+    console.error("getNextOrderNumberForToday:", error);
+    return 1;
+  }
+  return (count ?? 0) + 1;
+}
+
+/** Persists order in the background; never throws — log only. */
+function persistPendingOrder({ order_number, items, total, paid, change_given }) {
+  void supabase
+    .from("orders")
+    .insert({
+      order_number,
+      status: "pending",
+      total,
+      paid,
+      change_given,
+      items,
+    })
+    .then(({ error }) => {
+      if (error) console.error("persistPendingOrder failed:", error);
+    });
+}
+
+// ══════════════════════════════════════════════════════════════
 // CAFÉ POS
 // ══════════════════════════════════════════════════════════════
 
@@ -169,6 +213,10 @@ function CafeScreen({ onBack, categories }) {
   const [screen, setScreen] = useState("menu");
   const [paid, setPaid] = useState("");
   const [showBreakdown, setShowBreakdown] = useState(false);
+  const [savingOrder, setSavingOrder] = useState(false);
+  const [doneOrderNumber, setDoneOrderNumber] = useState(null);
+  const [doneChange, setDoneChange] = useState(0);
+  const [doneLines, setDoneLines] = useState([]);
 
   const total = Object.values(order).reduce((s, { price, qty }) => s + price * qty, 0);
   const orderItems = Object.values(order).filter(i => i.qty > 0);
@@ -183,20 +231,81 @@ function CafeScreen({ onBack, categories }) {
     if (q <= 0) { const n = { ...p }; delete n[id]; return n; }
     return { ...p, [id]: { ...p[id], qty: q } };
   });
-  const reset = () => { setOrder({}); setPaid(""); setScreen("menu"); setShowBreakdown(false); setTab(0); };
+  const reset = () => {
+    setOrder({});
+    setPaid("");
+    setScreen("menu");
+    setShowBreakdown(false);
+    setTab(0);
+    setDoneOrderNumber(null);
+    setDoneChange(0);
+    setDoneLines([]);
+    setSavingOrder(false);
+  };
 
   const cat = categories[tab] || categories[0];
 
   if (screen === "done") return (
     <div>
       <Header title="✅ Order Complete" />
-      <div style={{ padding: "40px 24px", textAlign: "center" }}>
-        <div style={{ fontSize: 72, marginBottom: 12 }}>🙏</div>
-        <div style={{ fontSize: 22, fontWeight: "bold", color: G.green, marginBottom: 4, fontFamily: "Georgia,serif" }}>Thank You!</div>
-        <div style={{ fontSize: 14, color: G.textLight, fontStyle: "italic", marginBottom: 24 }}>Terima Kasih</div>
-        <div style={{ background: G.greenPale, borderRadius: 20, padding: 20, border: `2px solid ${G.green}`, marginBottom: 32 }}>
+      <div style={{ padding: "28px 20px", textAlign: "center" }}>
+        <div style={{ fontSize: 22, fontWeight: "bold", color: G.green, marginBottom: 8, fontFamily: "Georgia,serif" }}>Thank You!</div>
+        <div style={{ fontSize: 13, color: G.textLight, fontStyle: "italic", marginBottom: 24 }}>Terima Kasih</div>
+
+        {doneOrderNumber != null && (
+          <div style={{ marginBottom: 28 }}>
+            <div style={{ fontSize: 12, color: G.textLight, marginBottom: 10, fontStyle: "italic" }}>Your order number</div>
+            <div
+              style={{
+                width: 140,
+                height: 140,
+                borderRadius: "50%",
+                background: G.green,
+                color: G.white,
+                fontSize: 80,
+                fontWeight: "bold",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                margin: "0 auto",
+                fontFamily: "Georgia,serif",
+                lineHeight: 1,
+              }}
+            >
+              {doneOrderNumber}
+            </div>
+          </div>
+        )}
+
+        <div style={{ textAlign: "left", maxWidth: 360, margin: "0 auto 24px" }}>
+          {doneLines.map(item => (
+            <div
+              key={item.id}
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 12,
+                marginBottom: 12,
+                background: G.white,
+                borderRadius: 14,
+                padding: 10,
+                border: `1px solid ${G.greenPale}`,
+              }}
+            >
+              {item.image
+                ? <img src={item.image} alt="" style={{ width: 56, height: 56, borderRadius: 10, objectFit: "cover", flexShrink: 0 }} onError={e => { e.target.style.display = "none"; }} />
+                : <div style={{ width: 56, height: 56, borderRadius: 10, background: G.greenPale, flexShrink: 0 }} />}
+              <div style={{ flex: 1 }}>
+                <div style={{ fontSize: 15, fontWeight: "bold", color: G.text }}>{item.name}</div>
+                <div style={{ fontSize: 13, color: G.textLight }}>× {item.qty}</div>
+              </div>
+            </div>
+          ))}
+        </div>
+
+        <div style={{ background: G.greenPale, borderRadius: 20, padding: 20, border: `2px solid ${G.green}`, marginBottom: 28 }}>
           <div style={{ fontSize: 13, color: G.textLight, fontStyle: "italic", marginBottom: 6 }}>Change given</div>
-          <div style={{ fontSize: 44, fontWeight: "bold", fontFamily: "monospace", color: G.green }}>RM {Math.max(0, change).toFixed(2)}</div>
+          <div style={{ fontSize: 44, fontWeight: "bold", fontFamily: "monospace", color: G.green }}>RM {doneChange.toFixed(2)}</div>
         </div>
         <ActionBtn label="New Order" color={G.green} onClick={reset} />
       </div>
@@ -205,7 +314,7 @@ function CafeScreen({ onBack, categories }) {
 
   if (screen === "payment") return (
     <div>
-      <Header title="Payment" sub={`Total: RM ${total.toFixed(2)}`} onBack={() => setScreen("menu")} />
+      <Header title="Payment" sub={`Total: RM ${total.toFixed(2)}`} onBack={() => setScreen("summary")} />
       <div style={{ padding: "20px 16px" }}>
         <div style={{ fontSize: 14, color: G.textLight, marginBottom: 8, fontStyle: "italic" }}>How much did the customer give you?</div>
         <input type="number" inputMode="decimal" autoFocus value={paid} onChange={e => { setPaid(e.target.value); setShowBreakdown(false); }} placeholder="RM 0.00"
@@ -218,7 +327,7 @@ function CafeScreen({ onBack, categories }) {
                 {neg ? `RM ${Math.abs(change).toFixed(2)} short` : `RM ${change.toFixed(2)}`}
               </div>
               {!neg && change > 0.001 && (
-                <button onClick={() => setShowBreakdown(v => !v)} style={{ background: "none", border: `1px solid ${G.greenLight}`, color: G.greenLight, borderRadius: 20, padding: "6px 16px", fontSize: 12, cursor: "pointer", marginTop: 8, fontFamily: "Georgia,serif", fontStyle: "italic" }}>
+                <button type="button" onClick={() => setShowBreakdown(v => !v)} style={{ background: "none", border: `1px solid ${G.greenLight}`, color: G.greenLight, borderRadius: 20, padding: "6px 16px", fontSize: 12, cursor: "pointer", marginTop: 8, fontFamily: "Georgia,serif", fontStyle: "italic" }}>
                   {showBreakdown ? "Hide" : "How to give change?"}
                 </button>
               )}
@@ -234,9 +343,80 @@ function CafeScreen({ onBack, categories }) {
                 ))}
               </div>
             )}
-            {!neg && <ActionBtn label="✓ Done — Change Given" color={G.green} onClick={() => setScreen("done")} />}
+            {!neg && (
+              <ActionBtn
+                label={savingOrder ? "Saving…" : "✓ Done — Change Given"}
+                color={G.green}
+                onClick={async () => {
+                  if (savingOrder) return;
+                  setSavingOrder(true);
+                  const changeGiven = Math.max(0, change);
+                  const itemsPayload = buildOrderItemsForSupabase(orderItems);
+                  let order_number = 1;
+                  try {
+                    order_number = await getNextOrderNumberForToday();
+                  } catch (e) {
+                    console.error("getNextOrderNumberForToday:", e);
+                  }
+                  setDoneOrderNumber(order_number);
+                  setDoneChange(changeGiven);
+                  setDoneLines(orderItems.map((i) => ({ ...i })));
+                  setOrder({});
+                  setPaid("");
+                  setShowBreakdown(false);
+                  setScreen("done");
+                  setSavingOrder(false);
+                  persistPendingOrder({
+                    order_number,
+                    items: itemsPayload,
+                    total,
+                    paid: paidNum,
+                    change_given: changeGiven,
+                  });
+                }}
+              />
+            )}
           </>
         )}
+      </div>
+    </div>
+  );
+
+  if (screen === "summary") return (
+    <div>
+      <Header title="Order summary" sub={`Total: RM ${total.toFixed(2)}`} onBack={() => setScreen("menu")} />
+      <div style={{ padding: "16px 16px 24px" }}>
+        {orderItems.map(item => (
+          <div
+            key={item.id}
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 12,
+              marginBottom: 14,
+              background: G.white,
+              borderRadius: 14,
+              padding: 12,
+              border: `1px solid ${G.greenPale}`,
+              boxShadow: "0 1px 6px rgba(0,0,0,0.05)",
+            }}
+          >
+            {item.image
+              ? <img src={item.image} alt="" style={{ width: 64, height: 64, borderRadius: 12, objectFit: "cover", flexShrink: 0 }} onError={e => { e.target.style.display = "none"; }} />
+              : <div style={{ width: 64, height: 64, borderRadius: 12, background: G.greenPale, flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 24 }}>☕</div>}
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ fontSize: 16, fontWeight: "bold", color: G.text, fontFamily: "Georgia,serif" }}>{item.name}</div>
+              <div style={{ fontSize: 13, color: G.textLight }}>RM {item.price.toFixed(2)} × {item.qty}</div>
+            </div>
+            <div style={{ fontSize: 16, fontWeight: "bold", fontFamily: "monospace", color: G.amber }}>RM {(item.price * item.qty).toFixed(2)}</div>
+          </div>
+        ))}
+        <div style={{ borderTop: `2px dashed ${G.greenPale}`, margin: "20px 0 16px", paddingTop: 16, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          <span style={{ fontSize: 17, fontWeight: "bold" }}>Total</span>
+          <span style={{ fontSize: 26, fontWeight: "bold", color: G.green, fontFamily: "monospace" }}>RM {total.toFixed(2)}</span>
+        </div>
+        <ActionBtn label="Confirm & Pay →" color={G.green} onClick={() => setScreen("payment")} />
+        <ActionBtn label="← Edit Order" outline onClick={() => setScreen("menu")} />
       </div>
     </div>
   );
@@ -246,7 +426,7 @@ function CafeScreen({ onBack, categories }) {
       <Header title="☕ Café Order" sub="Tap items to add to order" onBack={onBack} />
       <div style={{ display: "flex", background: G.white, borderBottom: `2px solid ${G.greenPale}`, overflowX: "auto" }}>
         {categories.map((c, i) => (
-          <button key={c.id} onClick={() => setTab(i)} style={{ flex: 1, padding: "12px 8px", border: "none", background: tab === i ? G.green : G.white, color: tab === i ? G.white : G.textLight, fontSize: 13, fontFamily: "Georgia,serif", fontWeight: tab === i ? "bold" : "normal", cursor: "pointer", whiteSpace: "nowrap", borderBottom: tab === i ? `3px solid ${G.amber}` : "none" }}>
+          <button type="button" key={c.id} onClick={() => setTab(i)} style={{ flex: 1, padding: "12px 8px", border: "none", background: tab === i ? G.green : G.white, color: tab === i ? G.white : G.textLight, fontSize: 13, fontFamily: "Georgia,serif", fontWeight: tab === i ? "bold" : "normal", cursor: "pointer", whiteSpace: "nowrap", borderBottom: tab === i ? `3px solid ${G.amber}` : "none" }}>
             {c.emoji} {c.label}
           </button>
         ))}
@@ -256,7 +436,7 @@ function CafeScreen({ onBack, categories }) {
           const qty = order[item.id]?.qty || 0;
           const hasImg = Boolean(item.image);
           return (
-            <button key={item.id} onClick={() => add(item)} style={{ background: G.white, borderRadius: 16, padding: 0, border: `2px solid ${qty > 0 ? G.green : G.greenPale}`, cursor: "pointer", boxShadow: qty > 0 ? "0 4px 12px rgba(45,90,39,0.25)" : "0 2px 8px rgba(0,0,0,0.06)", position: "relative", textAlign: "left", display: "flex", flexDirection: "column", alignItems: "stretch", overflow: "hidden", minHeight: hasImg ? 138 : undefined }}>
+            <button type="button" key={item.id} onClick={() => add(item)} style={{ background: G.white, borderRadius: 16, padding: 0, border: `2px solid ${qty > 0 ? G.green : G.greenPale}`, cursor: "pointer", boxShadow: qty > 0 ? "0 4px 12px rgba(45,90,39,0.25)" : "0 2px 8px rgba(0,0,0,0.06)", position: "relative", textAlign: "left", display: "flex", flexDirection: "column", alignItems: "stretch", overflow: "hidden", minHeight: hasImg ? 138 : undefined }}>
               {qty > 0 && <div style={{ position: "absolute", top: -8, right: -8, background: G.amber, color: G.white, borderRadius: "50%", width: 26, height: 26, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 13, fontWeight: "bold", zIndex: 2 }}>{qty}</div>}
               {hasImg && (
                 <div
@@ -281,7 +461,7 @@ function CafeScreen({ onBack, categories }) {
               <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
                 {["-", item.qty, "+"].map((v, i) => i === 1
                   ? <span key="q" style={{ fontSize: 15, fontWeight: "bold", minWidth: 22, textAlign: "center" }}>{v}</span>
-                  : <button key={v} onClick={() => adj(item.id, i === 0 ? -1 : 1)} style={{ width: 28, height: 28, borderRadius: 8, border: `1px solid ${G.greenPale}`, background: G.greenPale, color: G.green, fontSize: 16, cursor: "pointer", fontWeight: "bold" }}>{v}</button>
+                  : <button type="button" key={v} onClick={() => adj(item.id, i === 0 ? -1 : 1)} style={{ width: 28, height: 28, borderRadius: 8, border: `1px solid ${G.greenPale}`, background: G.greenPale, color: G.green, fontSize: 16, cursor: "pointer", fontWeight: "bold" }}>{v}</button>
                 )}
               </div>
               <div style={{ fontSize: 13, fontFamily: "monospace", color: G.amber, minWidth: 60, textAlign: "right" }}>RM {(item.price * item.qty).toFixed(2)}</div>
@@ -292,7 +472,7 @@ function CafeScreen({ onBack, categories }) {
             <span style={{ fontSize: 16, fontWeight: "bold" }}>Total</span>
             <span style={{ fontSize: 26, fontWeight: "bold", color: G.green, fontFamily: "monospace" }}>RM {total.toFixed(2)}</span>
           </div>
-          <ActionBtn label="Proceed to Payment →" color={G.green} onClick={() => setScreen("payment")} />
+          <ActionBtn label="Review order →" color={G.green} onClick={() => setScreen("summary")} />
           <ActionBtn label="Clear Order" outline onClick={reset} />
         </div>
       )}
@@ -1058,6 +1238,102 @@ function LogoAdmin({ logo, setLogo, onBack }) {
 }
 
 // ══════════════════════════════════════════════════════════════
+// ADMIN — TODAY'S ORDERS
+// ══════════════════════════════════════════════════════════════
+
+function OrdersAdmin({ onBack }) {
+  const [rows, setRows] = useState([]);
+  const [loading, setLoading] = useState(true);
+
+  const load = useCallback(async () => {
+    const start = new Date();
+    start.setHours(0, 0, 0, 0);
+    const { data, error } = await supabase
+      .from("orders")
+      .select("id, order_number, created_at, status, total, items")
+      .gte("created_at", start.toISOString())
+      .order("created_at", { ascending: false });
+    if (error) console.error(error);
+    setRows(data ?? []);
+    setLoading(false);
+  }, []);
+
+  useEffect(() => {
+    load();
+  }, [load]);
+
+  const statusStyle = (status) => {
+    const s = String(status || "").toLowerCase();
+    if (s === "pending") return { background: G.amberLight, color: "#92400e", border: `1px solid ${G.amber}` };
+    if (s === "ready") return { background: "#dbeafe", color: "#1e40af", border: "1px solid #93c5fd" };
+    return { background: G.greenPale, color: G.green, border: `1px solid ${G.greenPale}` };
+  };
+
+  const formatTime = (iso) => {
+    try {
+      return new Date(iso).toLocaleString(undefined, { hour: "2-digit", minute: "2-digit", month: "short", day: "numeric" });
+    } catch {
+      return iso;
+    }
+  };
+
+  return (
+    <div>
+      <Header title="📋 Today's Orders" sub="All orders from midnight today" onBack={onBack} />
+      <div style={{ padding: 16 }}>
+        {loading ? (
+          <div style={{ textAlign: "center", color: G.textLight, padding: 40, fontStyle: "italic" }}>Loading…</div>
+        ) : rows.length === 0 ? (
+          <div style={{ textAlign: "center", color: G.textLight, padding: 40, fontStyle: "italic" }}>No orders yet today.</div>
+        ) : (
+          rows.map((o) => (
+            <div
+              key={o.id}
+              style={{
+                background: G.white,
+                borderRadius: 14,
+                padding: 14,
+                marginBottom: 12,
+                border: `1px solid ${G.greenPale}`,
+                boxShadow: "0 1px 6px rgba(0,0,0,0.06)",
+              }}
+            >
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10, gap: 8 }}>
+                <div>
+                  <div style={{ fontSize: 17, fontWeight: "bold", color: G.green, fontFamily: "Georgia,serif" }}>Order #{o.order_number}</div>
+                  <div style={{ fontSize: 12, color: G.textLight }}>{formatTime(o.created_at)}</div>
+                </div>
+                <span
+                  style={{
+                    fontSize: 11,
+                    fontWeight: "bold",
+                    textTransform: "uppercase",
+                    padding: "4px 10px",
+                    borderRadius: 20,
+                    ...statusStyle(o.status),
+                  }}
+                >
+                  {o.status || "—"}
+                </span>
+              </div>
+              <ul style={{ margin: "0 0 10px", paddingLeft: 18, fontSize: 14, color: G.text }}>
+                {(o.items ?? []).map((it, i) => (
+                  <li key={`${it.id}-${i}`} style={{ marginBottom: 4 }}>
+                    {it.qty}× {it.name}
+                  </li>
+                ))}
+              </ul>
+              <div style={{ fontSize: 16, fontWeight: "bold", fontFamily: "monospace", color: G.amber }}>Total RM {Number(o.total).toFixed(2)}</div>
+            </div>
+          ))
+        )}
+        <ActionBtn label="Refresh" outline onClick={() => { setLoading(true); load(); }} />
+      </div>
+    </div>
+  );
+}
+
+// ══════════════════════════════════════════════════════════════
 // ADMIN HOME
 // ══════════════════════════════════════════════════════════════
 
@@ -1092,6 +1368,7 @@ function AdminScreen({ onBack, categories, setCategories, plants, setPlants, log
   if (view === "menu") return <MenuAdmin categories={categories} setCategories={setCategories} onBack={() => setView("home")} />;
   if (view === "plants") return <PlantAdmin plants={plants} setPlants={setPlants} onBack={() => setView("home")} />;
   if (view === "logo") return <LogoAdmin logo={logo} setLogo={setLogo} onBack={() => setView("home")} />;
+  if (view === "orders") return <OrdersAdmin onBack={() => setView("home")} />;
   return (
     <div>
       <Header title="⚙️ Admin" sub="Manage your content" onBack={onBack} />
@@ -1100,6 +1377,7 @@ function AdminScreen({ onBack, categories, setCategories, plants, setPlants, log
         <BigBtn emoji="☕" label="Manage Menu" sub="Add, edit or remove food & drink items" color={G.green} onClick={() => setView("menu")} />
         <BigBtn emoji="🌿" label="Manage Plants" sub="Add plants & generate QR codes" color={G.amber} onClick={() => setView("plants")} />
         <BigBtn emoji="🖼️" label="Change Logo" sub="Update the home screen logo" color={G.brownLight} onClick={() => setView("logo")} />
+        <BigBtn emoji="📋" label="Today's Orders" sub="View café orders from today" color={G.greenLight} onClick={() => setView("orders")} />
       </div>
     </div>
   );

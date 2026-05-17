@@ -1,0 +1,205 @@
+"use client";
+
+import { useCallback, useEffect, useState } from "react";
+import { supabase } from "@/lib/supabase";
+
+type OrderRow = {
+  id: string;
+  order_number: number;
+  created_at: string;
+  status: string;
+  total: number;
+  items: { id: string; name: string; price: number; qty: number; image?: string }[];
+};
+
+const K = {
+  bg: "#0f2918",
+  card: "#1a3d24",
+  accent: "#22c55e",
+  white: "#ffffff",
+  muted: "#a7c4b0",
+};
+
+function startOfTodayIso() {
+  const d = new Date();
+  d.setHours(0, 0, 0, 0);
+  return d.toISOString();
+}
+
+export function formatTime(iso: string) {
+  try {
+    return new Date(iso).toLocaleTimeString(undefined, {
+      hour: "2-digit",
+      minute: "2-digit",
+    });
+  } catch {
+    return iso;
+  }
+}
+
+export function KitchenScreen() {
+  const [orders, setOrders] = useState<OrderRow[]>([]);
+  const [clock, setClock] = useState(() => new Date());
+  const [busyId, setBusyId] = useState<string | null>(null);
+
+  const load = useCallback(async () => {
+    const start = startOfTodayIso();
+    const { data, error } = await supabase
+      .from("orders")
+      .select("id, order_number, created_at, status, total, items")
+      .eq("status", "pending")
+      .gte("created_at", start)
+      .order("created_at", { ascending: true });
+
+    if (error) {
+      console.error(error);
+      return;
+    }
+    setOrders((data ?? []) as OrderRow[]);
+  }, []);
+
+  useEffect(() => {
+    load();
+    const poll = setInterval(load, 10_000);
+    return () => clearInterval(poll);
+  }, [load]);
+
+  useEffect(() => {
+    const t = setInterval(() => setClock(new Date()), 1000);
+    return () => clearInterval(t);
+  }, []);
+
+  const markReady = async (id: string) => {
+    setBusyId(id);
+    const { error } = await supabase.from("orders").update({ status: "ready" }).eq("id", id);
+    setBusyId(null);
+    if (error) {
+      console.error(error);
+      alert(error.message);
+      return;
+    }
+    await load();
+  };
+
+  return (
+    <div
+      style={{
+        minHeight: "100vh",
+        background: K.bg,
+        color: K.white,
+        fontFamily: "system-ui, -apple-system, Segoe UI, Roboto, sans-serif",
+        padding: "20px 16px 40px",
+        boxSizing: "border-box",
+      }}
+    >
+      <div
+        style={{
+          display: "flex",
+          justifyContent: "space-between",
+          alignItems: "baseline",
+          flexWrap: "wrap",
+          gap: 12,
+          marginBottom: 24,
+          borderBottom: `1px solid ${K.card}`,
+          paddingBottom: 16,
+        }}
+      >
+        <h1 style={{ margin: 0, fontSize: 28, fontWeight: 700 }}>Kitchen Orders</h1>
+        <div style={{ fontSize: 22, fontVariantNumeric: "tabular-nums", color: K.muted }}>
+          {clock.toLocaleTimeString(undefined, {
+            hour: "2-digit",
+            minute: "2-digit",
+            second: "2-digit",
+          })}
+        </div>
+      </div>
+
+      {orders.length === 0 ? (
+        <div
+          style={{
+            textAlign: "center",
+            fontSize: 32,
+            fontWeight: 600,
+            color: K.muted,
+            marginTop: "18vh",
+          }}
+        >
+          All caught up! 🎉
+        </div>
+      ) : (
+        <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
+          {orders.map((o) => (
+            <div
+              key={o.id}
+              style={{
+                background: K.card,
+                borderRadius: 16,
+                padding: 20,
+                border: `1px solid rgba(255,255,255,0.08)`,
+              }}
+            >
+              <div style={{ display: "flex", alignItems: "center", gap: 16, marginBottom: 16 }}>
+                <div
+                  style={{
+                    width: 64,
+                    height: 64,
+                    borderRadius: "50%",
+                    background: K.accent,
+                    color: K.bg,
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    fontSize: 26,
+                    fontWeight: 800,
+                    flexShrink: 0,
+                  }}
+                >
+                  {o.order_number}
+                </div>
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontSize: 14, color: K.muted }}>Order #{o.order_number}</div>
+                  <div style={{ fontSize: 18, fontWeight: 600 }}>{formatTime(o.created_at)}</div>
+                </div>
+              </div>
+              <ul style={{ listStyle: "none", margin: "0 0 20px", padding: 0 }}>
+                {(o.items ?? []).map((it, i) => (
+                  <li
+                    key={`${it.id}-${i}`}
+                    style={{
+                      fontSize: 22,
+                      fontWeight: 600,
+                      padding: "10px 0",
+                      borderTop: i ? `1px solid rgba(255,255,255,0.1)` : "none",
+                    }}
+                  >
+                    <span style={{ color: K.accent, marginRight: 8 }}>{it.qty}×</span>
+                    {it.name}
+                  </li>
+                ))}
+              </ul>
+              <button
+                type="button"
+                disabled={busyId === o.id}
+                onClick={() => markReady(o.id)}
+                style={{
+                  width: "100%",
+                  padding: "18px",
+                  fontSize: 22,
+                  fontWeight: 700,
+                  border: "none",
+                  borderRadius: 14,
+                  background: K.accent,
+                  color: K.bg,
+                  cursor: busyId === o.id ? "wait" : "pointer",
+                  opacity: busyId === o.id ? 0.7 : 1,
+                }}
+              >
+                {busyId === o.id ? "…" : "✅ Ready"}
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
