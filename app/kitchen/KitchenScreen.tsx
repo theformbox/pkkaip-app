@@ -107,38 +107,6 @@ function getWebAudioContextConstructor(): (typeof AudioContext) | null {
   return w.AudioContext ?? w.webkitAudioContext ?? null;
 }
 
-function formatNewOrderAnnouncementText(order: OrderRow): string {
-  const itemsPart = (order.items ?? []).map((i) => `${i.qty} ${i.name}`).join(", ");
-  return `New order! Order number ${order.order_number}. ${itemsPart || "no items"}`;
-}
-
-const ANNOUNCEMENT_SPEECH_RATE = 0.9;
-
-/** Approximate duration of playNewOrderChime — speech starts after this so it isn’t drowned out. */
-const NEW_ORDER_CHIME_MS_BEFORE_SPEECH = 1750;
-
-function prepareSpeechSynthesis() {
-  if (typeof window === "undefined" || !window.speechSynthesis) return;
-  try {
-    window.speechSynthesis.cancel();
-    window.speechSynthesis.resume();
-  } catch (e) {
-    console.error(e);
-  }
-}
-
-/** Queue one or more utterances (same pattern as a single new-order line). */
-function speakQueuedKitchenUtterances(texts: string[]) {
-  if (typeof window === "undefined" || !window.speechSynthesis) return;
-  prepareSpeechSynthesis();
-  for (const text of texts) {
-    const utterance = new SpeechSynthesisUtterance(text);
-    utterance.rate = ANNOUNCEMENT_SPEECH_RATE;
-    utterance.pitch = 1;
-    utterance.volume = 1;
-    window.speechSynthesis.speak(utterance);
-  }
-}
 
 /** Stronger attention pattern: alert beeps + longer ascending fanfare. */
 function playNewOrderChime(ctx: AudioContext) {
@@ -434,7 +402,8 @@ function EditOrderModal({
 
 export function KitchenScreen() {
   const initialUnlocked = readAudioUnlockedFromStorage();
-  const [orders, setOrders] = useState<OrderRow[]>([]);
+  const [pendingOrders, setPendingOrders] = useState<OrderRow[]>([]);
+  const [completedOrders, setCompletedOrders] = useState<OrderRow[]>([]);
   const [clock, setClock] = useState(() => new Date());
   const [busyId, setBusyId] = useState<string | null>(null);
   const [editingOrder, setEditingOrder] = useState<OrderRow | null>(null);
@@ -446,8 +415,11 @@ export function KitchenScreen() {
   const [audioUnlocked, setAudioUnlocked] = useState(initialUnlocked);
   const soundOnRef = useRef(true);
   const audioUnlockedRef = useRef(initialUnlocked);
+  /** Previous pending order IDs from last successful poll — for new-order sound only. */
   const prevPendingIdsRef = useRef<Set<string> | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
+  /** True while any Supabase write is in flight; polls skip to avoid clobbering optimistic UI. */
+  const isUpdating = useRef(false);
 
   soundOnRef.current = soundOn;
   audioUnlockedRef.current = audioUnlocked;
@@ -495,6 +467,22 @@ export function KitchenScreen() {
       } catch {
         /* ignore */
       }
+      const isMuted = !soundOnRef.current;
+      console.log("Muted:", isMuted);
+      if (!isMuted) {
+        try {
+          window.speechSynthesis.cancel();
+          const test = new SpeechSynthesisUtterance("Sound enabled");
+          test.lang = "en-US";
+          test.rate = 0.85;
+          test.pitch = 1.0;
+          test.volume = 1.0;
+          console.log("Speaking:", "Sound enabled");
+          window.speechSynthesis.speak(test);
+        } catch (e) {
+          console.error(e);
+        }
+      }
     }
   }, [ensureAudioRunning]);
 
@@ -530,6 +518,9 @@ export function KitchenScreen() {
   };
 
   const load = useCallback(async () => {
+    if (isUpdating.current) return;
+
+    // Read-only fetch: never INSERT/UPDATE/DELETE order rows here (no accidental status changes).
     let q = supabase.from("orders").select("id, order_number, created_at, status, total, items");
 
     if (listView === "pending") {
@@ -553,20 +544,22 @@ export function KitchenScreen() {
       return;
     }
     const rows = (data ?? []) as OrderRow[];
-    setOrders(rows);
 
     if (listView === "pending") {
-      const newIds = new Set(rows.map((r) => r.id));
+      setPendingOrders(rows);
+
+      const newIds = new Set(rows.filter((r) => r.id).map((r) => String(r.id)));
       const prev = prevPendingIdsRef.current;
       if (prev !== null) {
-        const newlyAdded = rows.filter((r) => !prev.has(r.id));
+        const newlyAdded = rows.filter((r) => r.id && !prev.has(String(r.id)));
         if (newlyAdded.length > 0) {
           const sorted = [...newlyAdded].sort(
             (a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime(),
           );
-          const lines = sorted.map(formatNewOrderAnnouncementText);
+
           if (soundOnRef.current && audioUnlockedRef.current) {
             void ensureAudioRunning().then((running) => {
+              // Audio + speech only; no Supabase writes.
               if (!running || !soundOnRef.current || !audioUnlockedRef.current) return;
               const ctx = getOrCreateAudioContext();
               if (!ctx) return;
@@ -576,14 +569,35 @@ export function KitchenScreen() {
                 console.error(e);
               }
               window.setTimeout(() => {
-                if (!soundOnRef.current || !audioUnlockedRef.current) return;
-                speakQueuedKitchenUtterances(lines);
-              }, NEW_ORDER_CHIME_MS_BEFORE_SPEECH);
+                const isMuted = !soundOnRef.current;
+                console.log("Muted:", isMuted);
+                if (isMuted || !audioUnlockedRef.current) return;
+                if (typeof window === "undefined" || !window.speechSynthesis) return;
+                try {
+                  window.speechSynthesis.cancel();
+                  for (const o of sorted) {
+                    const text = `New order! Order number ${o.order_number}. ${(o.items ?? [])
+                      .map((i) => `${i.qty} ${i.name}`)
+                      .join(", ")}`;
+                    console.log("Speaking:", text);
+                    const utterance = new SpeechSynthesisUtterance(text);
+                    utterance.lang = "en-US";
+                    utterance.rate = 0.85;
+                    utterance.pitch = 1.0;
+                    utterance.volume = 1.0;
+                    window.speechSynthesis.speak(utterance);
+                  }
+                } catch (e) {
+                  console.error(e);
+                }
+              }, 500);
             });
           }
         }
       }
       prevPendingIdsRef.current = newIds;
+    } else {
+      setCompletedOrders(rows);
     }
   }, [listView, completedDateYmd, ensureAudioRunning, getOrCreateAudioContext]);
 
@@ -599,8 +613,10 @@ export function KitchenScreen() {
   }, []);
 
   const markReady = async (id: string) => {
-    const row = orders.find((o) => o.id === id);
+    const row = pendingOrders.find((o) => o.id === id);
     if (!row) return;
+
+    isUpdating.current = true;
 
     if (soundOnRef.current && audioUnlockedRef.current && typeof window !== "undefined" && window.speechSynthesis) {
       try {
@@ -613,11 +629,21 @@ export function KitchenScreen() {
     setBusyId(id);
     const { error } = await supabase.from("orders").update({ status: "ready" }).eq("id", id);
     setBusyId(null);
+
     if (error) {
       console.error(error);
       alert(error.message);
+      isUpdating.current = false;
       return;
     }
+
+    setPendingOrders((prev) => {
+      const next = prev.filter((o) => o.id !== id);
+      prevPendingIdsRef.current = new Set(next.filter((o) => o.id).map((o) => String(o.id)));
+      return next;
+    });
+
+    isUpdating.current = false;
 
     if (soundOnRef.current && audioUnlockedRef.current) {
       const running = await ensureAudioRunning();
@@ -631,36 +657,57 @@ export function KitchenScreen() {
           }
         }
         if (typeof window !== "undefined" && window.speechSynthesis) {
-          try {
-            window.speechSynthesis.cancel();
-            window.speechSynthesis.resume();
-          } catch (e) {
-            console.error(e);
-          }
-          const utterance = new SpeechSynthesisUtterance(
-            `Order number ${row.order_number} is ready for collection!`,
-          );
-          utterance.rate = 0.9;
-          utterance.pitch = 1;
-          utterance.volume = 1;
-          window.speechSynthesis.speak(utterance);
+          window.setTimeout(() => {
+            const isMuted = !soundOnRef.current;
+            console.log("Muted:", isMuted);
+            if (isMuted || !audioUnlockedRef.current) return;
+            const text = `Order number ${row.order_number} is ready for collection!`;
+            console.log("Speaking:", text);
+            const utterance = new SpeechSynthesisUtterance(text);
+            utterance.lang = "en-US";
+            utterance.rate = 0.85;
+            utterance.pitch = 1.0;
+            utterance.volume = 1.0;
+            try {
+              window.speechSynthesis.cancel();
+              window.speechSynthesis.speak(utterance);
+            } catch (e) {
+              console.error(e);
+            }
+          }, 300);
         }
       }
     }
-
-    await load();
   };
 
   const reopenOrder = async (id: string) => {
+    const row = completedOrders.find((o) => o.id === id);
+    if (!row) return;
+
+    isUpdating.current = true;
     setBusyId(id);
+
     const { error } = await supabase.from("orders").update({ status: "pending" }).eq("id", id);
     setBusyId(null);
+
     if (error) {
       console.error(error);
       alert(error.message);
+      isUpdating.current = false;
       return;
     }
-    await load();
+
+    const backToPending: OrderRow = { ...row, status: "pending" };
+    setCompletedOrders((prev) => prev.filter((o) => o.id !== id));
+    setPendingOrders((prev) => {
+      const next = [...prev, backToPending].sort(
+        (a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime(),
+      );
+      prevPendingIdsRef.current = new Set(next.filter((o) => o.id).map((o) => String(o.id)));
+      return next;
+    });
+
+    isUpdating.current = false;
   };
 
   const openEditOrder = (o: OrderRow) => {
@@ -681,6 +728,8 @@ export function KitchenScreen() {
       alert("Keep at least one item in the order.");
       return;
     }
+
+    isUpdating.current = true;
     setEditSaving(true);
     const total = sumItemsTotal(filtered);
     const itemsPayload = filtered.map((it) => {
@@ -693,20 +742,31 @@ export function KitchenScreen() {
       if (it.id != null && it.id !== "") row.id = String(it.id);
       return row;
     });
+    const editId = editingOrder.id;
+    const updatedRow: OrderRow = { ...editingOrder, items: filtered, total };
+
     const { error } = await supabase
       .from("orders")
       .update({ items: itemsPayload, total })
-      .eq("id", editingOrder.id);
+      .eq("id", editId);
+
     setEditSaving(false);
+
     if (error) {
       console.error(error);
       alert(error.message);
+      isUpdating.current = false;
       return;
     }
+
+    setPendingOrders((prev) => prev.map((o) => (o.id === editId ? updatedRow : o)));
+    setCompletedOrders((prev) => prev.map((o) => (o.id === editId ? updatedRow : o)));
     setEditingOrder(null);
     setEditDraft([]);
-    await load();
+    isUpdating.current = false;
   };
+
+  const orders = listView === "pending" ? pendingOrders : completedOrders;
 
   return (
     <div
