@@ -373,8 +373,24 @@ function ImagePicker({ searchLabel, unsplashQuery, onSelect, onClose }) {
   const [selected, setSelected] = useState(null);
   const [customUrl, setCustomUrl] = useState("");
   const [loadedMap, setLoadedMap] = useState({});
+  const fileRef = useRef(null);
 
   const displayName = searchLabel?.trim() || "this";
+
+  const handleFile = (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      const dataUrl = ev.target?.result;
+      if (typeof dataUrl === "string") {
+        setCustomUrl(dataUrl);
+        setSelected(null);
+      }
+    };
+    reader.readAsDataURL(file);
+    e.target.value = "";
+  };
 
   useEffect(() => {
     const label = searchLabel?.trim() || "this";
@@ -449,6 +465,11 @@ function ImagePicker({ searchLabel, unsplashQuery, onSelect, onClose }) {
             </div>
           ))}
         </div>
+
+        <input ref={fileRef} type="file" accept="image/*" style={{ display: "none" }} onChange={handleFile} />
+        <button type="button" onClick={() => fileRef.current?.click()} style={{ width: "100%", padding: "13px", borderRadius: 12, border: `2px dashed ${G.green}`, background: G.greenPale, color: G.green, fontSize: 15, cursor: "pointer", marginBottom: 14, fontFamily: "Georgia,serif" }}>
+          📷 Upload your own photo
+        </button>
 
         <div style={{ borderTop: `1px dashed ${G.greenPale}`, marginBottom: 14 }} />
         <div style={{ fontSize: 12, color: G.textLight, marginBottom: 6, fontStyle: "italic" }}>Or paste your own image link:</div>
