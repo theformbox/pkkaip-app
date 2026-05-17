@@ -369,7 +369,7 @@ function GardenScreen({ onBack, plants }) {
 // ══════════════════════════════════════════════════════════════
 
 function ImagePicker({ searchLabel, unsplashQuery, onSelect, onClose }) {
-  const [images, setImages] = useState([]);
+  const [images, setImages] = useState(null);
   const [selected, setSelected] = useState(null);
   const [customUrl, setCustomUrl] = useState("");
   const [loadedMap, setLoadedMap] = useState({});
@@ -378,16 +378,52 @@ function ImagePicker({ searchLabel, unsplashQuery, onSelect, onClose }) {
 
   useEffect(() => {
     const label = searchLabel?.trim() || "this";
-    const q =
+    const searchQuery =
       unsplashQuery != null && String(unsplashQuery).trim() !== ""
         ? String(unsplashQuery).trim()
         : `${label} plant herb garden`.trim() || "nature";
-    const urls = Array.from({ length: 9 }, (_, i) =>
-      `https://source.unsplash.com/160x160/?${encodeURIComponent(q)}&sig=${i + Math.floor(Math.random() * 9999)}`
-    );
-    setImages(urls);
+
+    const apiKey = process.env.NEXT_PUBLIC_PEXELS_API_KEY;
+    if (!apiKey) {
+      console.error("NEXT_PUBLIC_PEXELS_API_KEY is not set");
+      setImages([]);
+      setLoadedMap({});
+      return;
+    }
+
+    const ac = new AbortController();
+    setImages(null);
     setLoadedMap({});
+    setSelected(null);
+
+    (async () => {
+      try {
+        const url = `https://api.pexels.com/v1/search?query=${encodeURIComponent(searchQuery)}&per_page=9`;
+        const res = await fetch(url, {
+          headers: { Authorization: apiKey },
+          signal: ac.signal,
+        });
+        if (!res.ok) throw new Error(`Pexels ${res.status}`);
+        const data = await res.json();
+        const urls = (data.photos ?? [])
+          .slice(0, 9)
+          .map((p) => p.src?.medium)
+          .filter(Boolean);
+        if (!ac.signal.aborted) setImages(urls);
+      } catch (e) {
+        if (e.name === "AbortError") return;
+        console.error(e);
+        if (!ac.signal.aborted) setImages([]);
+      }
+    })();
+
+    return () => ac.abort();
   }, [searchLabel, unsplashQuery]);
+
+  const slots =
+    images === null
+      ? Array.from({ length: 9 }, () => null)
+      : [...images, ...Array(Math.max(0, 9 - images.length)).fill(null)].slice(0, 9);
 
   const chosen = customUrl || selected;
 
@@ -401,13 +437,15 @@ function ImagePicker({ searchLabel, unsplashQuery, onSelect, onClose }) {
         <div style={{ fontSize: 12, color: G.textLight, fontStyle: "italic", marginBottom: 14 }}>Showing photos for "{displayName}" — tap one to select</div>
 
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8, marginBottom: 18 }}>
-          {images.map((url, i) => (
-            <div key={i} onClick={() => { setSelected(url); setCustomUrl(""); }} style={{ aspectRatio: "1", borderRadius: 12, overflow: "hidden", border: selected === url && !customUrl ? `3px solid ${G.green}` : "3px solid transparent", cursor: "pointer", position: "relative", background: G.greenPale }}>
-              <img src={url} alt="" style={{ width: "100%", height: "100%", objectFit: "cover", display: loadedMap[i] ? "block" : "none" }}
-                onLoad={() => setLoadedMap(m => ({ ...m, [i]: true }))}
-              />
-              {!loadedMap[i] && <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 28 }}>🌿</div>}
-              {selected === url && !customUrl && <div style={{ position: "absolute", top: 4, right: 4, background: G.green, borderRadius: "50%", width: 22, height: 22, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 13, color: G.white, fontWeight: "bold" }}>✓</div>}
+          {slots.map((url, i) => (
+            <div key={url ?? `slot-${i}`} onClick={() => { if (url) { setSelected(url); setCustomUrl(""); } }} style={{ aspectRatio: "1", borderRadius: 12, overflow: "hidden", border: url && selected === url && !customUrl ? `3px solid ${G.green}` : "3px solid transparent", cursor: url ? "pointer" : "default", position: "relative", background: G.greenPale, opacity: url ? 1 : 0.85 }}>
+              {url && (
+                <img src={url} alt="" style={{ width: "100%", height: "100%", objectFit: "cover", display: loadedMap[i] ? "block" : "none" }}
+                  onLoad={() => setLoadedMap(m => ({ ...m, [i]: true }))}
+                />
+              )}
+              {(!url || !loadedMap[i]) && <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 28 }}>🌿</div>}
+              {url && selected === url && !customUrl && <div style={{ position: "absolute", top: 4, right: 4, background: G.green, borderRadius: "50%", width: 22, height: 22, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 13, color: G.white, fontWeight: "bold" }}>✓</div>}
             </div>
           ))}
         </div>
