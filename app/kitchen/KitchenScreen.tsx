@@ -663,7 +663,7 @@ export function KitchenScreen() {
         let q = supabase
           .from("orders")
           .select(
-            "id, order_number, created_at, status, total, items, customer_name, staff_name, completed_at",
+            "id, order_number, items, total, status, created_at, completed_at, customer_name, staff_name",
           );
 
         if (listView === "pending") {
@@ -1228,14 +1228,15 @@ export function KitchenScreen() {
         </div>
       ) : (
         <div style={{ display: "flex", flexDirection: "column", gap: 28 }}>
-          {orders.map((o) => {
+          {orders.map((order) => {
+            console.log("order data:", order);
             const isDone = listView === "completed";
-            const customerTrim = typeof o.customer_name === "string" ? o.customer_name.trim() : "";
-            const staffTrim = typeof o.staff_name === "string" ? o.staff_name.trim() : "";
+            const customerTrim =
+              typeof order.customer_name === "string" ? order.customer_name.trim() : "";
 
             return (
               <article
-                key={o.id}
+                key={order.id}
                 style={{
                   background: isDone ? PAGE.completedBg : PENDING_CARD.bg,
                   color: isDone ? PAGE.completedInk : PAGE.white,
@@ -1250,8 +1251,8 @@ export function KitchenScreen() {
                   type="button"
                   title="Adjust order"
                   aria-label="Adjust order"
-                  disabled={busyId === o.id || editSaving}
-                  onClick={() => openEditOrder(o)}
+                  disabled={busyId === order.id || editSaving}
+                  onClick={() => openEditOrder(order)}
                   style={{
                     position: "absolute",
                     top: 16,
@@ -1262,7 +1263,7 @@ export function KitchenScreen() {
                     padding: 0,
                     border: "none",
                     background: PAGE.amberPill,
-                    cursor: busyId === o.id || editSaving ? "wait" : "pointer",
+                    cursor: busyId === order.id || editSaving ? "wait" : "pointer",
                     display: "flex",
                     alignItems: "center",
                     justifyContent: "center",
@@ -1319,7 +1320,7 @@ export function KitchenScreen() {
                       boxShadow: "0 4px 12px rgba(0,0,0,0.2)",
                     }}
                   >
-                    {o.order_number}
+                    {order.order_number}
                   </div>
                   <div style={{ flex: "1 1 200px" }}>
                     <div
@@ -1330,7 +1331,7 @@ export function KitchenScreen() {
                         color: isDone ? PAGE.completedInk : PAGE.white,
                       }}
                     >
-                      Order #{o.order_number}
+                      Order #{order.order_number}
                     </div>
                     <div
                       style={{
@@ -1339,7 +1340,7 @@ export function KitchenScreen() {
                         color: isDone ? PAGE.completedInk : "rgba(255,255,255,0.9)",
                       }}
                     >
-                      {formatTime(o.created_at)}
+                      {formatTime(order.created_at)}
                     </div>
                     {customerTrim ? (
                       <div
@@ -1354,24 +1355,16 @@ export function KitchenScreen() {
                         For: {customerTrim}
                       </div>
                     ) : null}
-                    {staffTrim ? (
-                      <div
-                        style={{
-                          fontSize: 14,
-                          fontWeight: 600,
-                          fontFamily: "Georgia, 'Times New Roman', serif",
-                          color: isDone ? "rgba(26,26,26,0.75)" : PAGE.white,
-                          marginTop: customerTrim ? 6 : 8,
-                        }}
-                      >
-                        By: {staffTrim}
+                    {order.staff_name && (
+                      <div style={{ fontSize: 14, color: "#ffffff", marginTop: 2 }}>
+                        By: {order.staff_name}
                       </div>
-                    ) : null}
+                    )}
                   </div>
                 </div>
 
                 <ul style={{ listStyle: "none", margin: "0 0 28px", padding: 0 }}>
-                  {(o.items ?? []).map((it, i) => (
+                  {(order.items ?? []).map((it, i) => (
                     <li
                       key={`${it.id ?? it.name}-${i}`}
                       style={{
@@ -1424,8 +1417,8 @@ export function KitchenScreen() {
                 {isDone ? (
                   <button
                     type="button"
-                    disabled={busyId === o.id}
-                    onClick={() => reopenOrder(o.id)}
+                    disabled={busyId === order.id}
+                    onClick={() => reopenOrder(order.id)}
                     style={{
                       width: "100%",
                       minHeight: 80,
@@ -1436,18 +1429,18 @@ export function KitchenScreen() {
                       borderRadius: 20,
                       background: PAGE.reopenAmber,
                       color: PAGE.reopenAmberInk,
-                      cursor: busyId === o.id ? "wait" : "pointer",
-                      opacity: busyId === o.id ? 0.75 : 1,
+                      cursor: busyId === order.id ? "wait" : "pointer",
+                      opacity: busyId === order.id ? 0.75 : 1,
                       boxShadow: "0 6px 0 #CC9900, 0 8px 20px rgba(0,0,0,0.15)",
                     }}
                   >
-                    {busyId === o.id ? "…" : "🔄 Reopen"}
+                    {busyId === order.id ? "…" : "🔄 Reopen"}
                   </button>
                 ) : (
                   <button
                     type="button"
-                    disabled={busyId === o.id}
-                    onClick={() => markReady(o.id)}
+                    disabled={busyId === order.id}
+                    onClick={() => markReady(order.id)}
                     style={{
                       width: "100%",
                       minHeight: 80,
@@ -1457,12 +1450,12 @@ export function KitchenScreen() {
                       borderRadius: 20,
                       background: PAGE.readyGreen,
                       color: PAGE.white,
-                      cursor: busyId === o.id ? "wait" : "pointer",
-                      opacity: busyId === o.id ? 0.75 : 1,
+                      cursor: busyId === order.id ? "wait" : "pointer",
+                      opacity: busyId === order.id ? 0.75 : 1,
                       boxShadow: "0 6px 0 #1E7E34, 0 8px 20px rgba(0,0,0,0.2)",
                     }}
                   >
-                    {busyId === o.id ? "…" : "✅ Mark as Ready"}
+                    {busyId === order.id ? "…" : "✅ Mark as Ready"}
                   </button>
                 )}
               </article>
