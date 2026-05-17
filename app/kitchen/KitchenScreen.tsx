@@ -12,12 +12,14 @@ type OrderRow = {
   items: { id?: string; name: string; price: number; qty: number; image?: string }[];
 };
 
-/** Pastel card backgrounds — body text uses dark ink for contrast on these. */
-const CARD_PALETTE = [
-  { bg: "#FFF3CD", ink: "#1a1a1a", accent: "#856404", border: "#FFE69C", itemDot: "#B8860B" },
-  { bg: "#D4EDDA", ink: "#1a1a1a", accent: "#155724", border: "#A3D9B1", itemDot: "#28A745" },
-  { bg: "#CCE5FF", ink: "#1a1a1a", accent: "#004085", border: "#99C2FF", itemDot: "#0D47A1" },
-] as const;
+/** Pending order cards: one consistent dark green, white text. */
+const PENDING_CARD = {
+  bg: "#1e4d1e",
+  border: "#2f6b2f",
+  itemDot: "#a3e635",
+  divider: "rgba(255,255,255,0.2)",
+  orderCircle: "#145214",
+} as const;
 
 const PAGE = {
   bg: "#0d2818",
@@ -42,6 +44,38 @@ function startOfTodayIso() {
   const d = new Date();
   d.setHours(0, 0, 0, 0);
   return d.toISOString();
+}
+
+/** Local calendar day as YYYY-MM-DD (for `<input type="date" />`). */
+function todayYmdLocal() {
+  const d = new Date();
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+
+/** Inclusive local-day start and exclusive next-midnight (UTC ISO for Supabase). */
+function localDayBoundsIso(ymd: string) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(ymd)) {
+    return localDayBoundsIso(todayYmdLocal());
+  }
+  const [y, mo, day] = ymd.split("-").map(Number);
+  const start = new Date(y, mo - 1, day, 0, 0, 0, 0);
+  const endExclusive = new Date(y, mo - 1, day + 1, 0, 0, 0, 0);
+  return { startIso: start.toISOString(), endExclusiveIso: endExclusive.toISOString() };
+}
+
+/** e.g. "17 May 2026" from YYYY-MM-DD in local timezone. */
+function formatOrdersHeadingDate(ymd: string) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(ymd)) return todayYmdLocal();
+  const [y, mo, day] = ymd.split("-").map(Number);
+  const d = new Date(y, mo - 1, day);
+  try {
+    return d.toLocaleDateString(undefined, { day: "numeric", month: "long", year: "numeric" });
+  } catch {
+    return ymd;
+  }
 }
 
 export function formatTime(iso: string) {
@@ -76,50 +110,90 @@ function getWebAudioContextConstructor(): (typeof AudioContext) | null {
 function buildNewOrderSpeech(order: OrderRow): string {
   const parts = (order.items ?? []).map((it) => {
     const n = String(it.name ?? "").trim() || "item";
-    return it.qty > 1 ? `${it.qty} ${n}` : n;
+    const q = Math.max(1, Math.round(Number(it.qty) || 1));
+    return `Quantity ${q}: ${n}`;
   });
-  const itemsStr = parts.length ? parts.join(", ") : "no items listed";
-  return `New order! Order number ${order.order_number} — ${itemsStr}`;
+  const itemsStr = parts.length ? parts.join(". ") : "no items listed";
+  return `New order! Order number ${order.order_number}. ${itemsStr}`;
 }
+
+/** Slightly slower than default for clarity in a busy kitchen. */
+const KITCHEN_SPEECH_RATE = 0.72;
 
 function speakKitchen(text: string, opts?: { rate?: number }) {
   if (typeof window === "undefined" || !window.speechSynthesis) return;
   const u = new SpeechSynthesisUtterance(text);
-  u.rate = opts?.rate ?? 0.95;
+  u.rate = opts?.rate ?? KITCHEN_SPEECH_RATE;
   u.pitch = 1;
   u.volume = 1;
   window.speechSynthesis.speak(u);
 }
 
-function speakKitchenQueue(lines: string[]) {
+function speakKitchenQueue(lines: string[], rate = KITCHEN_SPEECH_RATE) {
   if (typeof window === "undefined" || !window.speechSynthesis) return;
   window.speechSynthesis.cancel();
   for (const line of lines) {
     const u = new SpeechSynthesisUtterance(line);
-    u.rate = 0.95;
+    u.rate = rate;
     u.pitch = 1;
     u.volume = 1;
     window.speechSynthesis.speak(u);
   }
 }
 
-/** Three ascending sine tones — friendly alert. */
+/** Stronger attention pattern: alert beeps + longer ascending fanfare. */
 function playNewOrderChime(ctx: AudioContext) {
-  const freqs = [523.25, 659.25, 783.99];
-  let t = ctx.currentTime;
-  for (const freq of freqs) {
+  const t0 = ctx.currentTime;
+  const peakMain = 0.22;
+  const peakBeep = 0.16;
+
+  const playTone = (
+    freq: number,
+    start: number,
+    sustain: number,
+    type: OscillatorType = "triangle",
+    peak: number = peakMain,
+  ) => {
+    const o = ctx.createOscillator();
+    const g = ctx.createGain();
+    o.connect(g);
+    g.connect(ctx.destination);
+    o.type = type;
+    o.frequency.setValueAtTime(freq, start);
+    g.gain.setValueAtTime(0, start);
+    g.gain.linearRampToValueAtTime(peak, start + 0.05);
+    g.gain.linearRampToValueAtTime(peak * 0.55, start + sustain * 0.55);
+    g.gain.linearRampToValueAtTime(0.001, start + sustain);
+    o.start(start);
+    o.stop(start + sustain + 0.02);
+  };
+
+  playTone(880, t0, 0.14, "square", peakBeep);
+  playTone(1046.5, t0 + 0.11, 0.14, "square", peakBeep);
+
+  const fanfare = [392, 523.25, 659.25, 783.99, 987.77, 1174.66];
+  let t = t0 + 0.32;
+  for (const f of fanfare) {
+    playTone(f, t, 0.42, "triangle", peakMain);
+    t += 0.19;
+  }
+}
+
+function playRepeatCueChime(ctx: AudioContext) {
+  const t0 = ctx.currentTime;
+  const peak = 0.12;
+  for (let i = 0; i < 2; i++) {
     const o = ctx.createOscillator();
     const g = ctx.createGain();
     o.connect(g);
     g.connect(ctx.destination);
     o.type = "sine";
-    o.frequency.setValueAtTime(freq, t);
-    g.gain.setValueAtTime(0, t);
-    g.gain.linearRampToValueAtTime(0.11, t + 0.025);
-    g.gain.linearRampToValueAtTime(0.001, t + 0.32);
-    o.start(t);
-    o.stop(t + 0.33);
-    t += 0.16;
+    o.frequency.setValueAtTime(i === 0 ? 660 : 880, t0 + i * 0.14);
+    g.gain.setValueAtTime(0, t0 + i * 0.14);
+    g.gain.linearRampToValueAtTime(peak, t0 + i * 0.14 + 0.04);
+    g.gain.linearRampToValueAtTime(0.001, t0 + i * 0.14 + 0.2);
+    o.start(t0 + i * 0.14);
+    o.stop(t0 + i * 0.14 + 0.22);
   }
 }
 
@@ -385,7 +459,9 @@ export function KitchenScreen() {
   const [editingOrder, setEditingOrder] = useState<OrderRow | null>(null);
   const [editDraft, setEditDraft] = useState<OrderItem[]>([]);
   const [editSaving, setEditSaving] = useState(false);
+  const [lastAnnouncementLines, setLastAnnouncementLines] = useState<string[]>([]);
   const [listView, setListView] = useState<KitchenView>("pending");
+  const [completedDateYmd, setCompletedDateYmd] = useState(todayYmdLocal);
   const [soundOn, setSoundOn] = useState(true);
   const [audioUnlocked, setAudioUnlocked] = useState(initialUnlocked);
   const soundOnRef = useRef(true);
@@ -467,16 +543,20 @@ export function KitchenScreen() {
   };
 
   const load = useCallback(async () => {
-    const start = startOfTodayIso();
-    let q = supabase
-      .from("orders")
-      .select("id, order_number, created_at, status, total, items")
-      .gte("created_at", start);
+    let q = supabase.from("orders").select("id, order_number, created_at, status, total, items");
 
     if (listView === "pending") {
-      q = q.eq("status", "pending").order("created_at", { ascending: true });
+      q = q
+        .eq("status", "pending")
+        .gte("created_at", startOfTodayIso())
+        .order("created_at", { ascending: true });
     } else {
-      q = q.eq("status", "ready").order("created_at", { ascending: false });
+      const { startIso, endExclusiveIso } = localDayBoundsIso(completedDateYmd);
+      q = q
+        .eq("status", "ready")
+        .gte("created_at", startIso)
+        .lt("created_at", endExclusiveIso)
+        .order("created_at", { ascending: false });
     }
 
     const { data, error } = await q;
@@ -494,25 +574,45 @@ export function KitchenScreen() {
       if (prev !== null && soundOnRef.current && audioUnlockedRef.current) {
         const newlyAdded = rows.filter((r) => !prev.has(r.id));
         if (newlyAdded.length > 0) {
-          void ensureAudioRunning().then((running) => {
-            if (!running || !soundOnRef.current) return;
-            const ctx = getOrCreateAudioContext();
-            if (!ctx) return;
-            try {
-              playNewOrderChime(ctx);
-            } catch (e) {
-              console.error(e);
-            }
-            const sorted = [...newlyAdded].sort(
-              (a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime(),
-            );
-            speakKitchenQueue(sorted.map(buildNewOrderSpeech));
-          });
+          const sorted = [...newlyAdded].sort(
+            (a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime(),
+          );
+          const lines = sorted.map(buildNewOrderSpeech);
+          setLastAnnouncementLines(lines);
+          if (soundOnRef.current && audioUnlockedRef.current) {
+            void ensureAudioRunning().then((running) => {
+              if (!running || !soundOnRef.current) return;
+              const ctx = getOrCreateAudioContext();
+              if (!ctx) return;
+              try {
+                playNewOrderChime(ctx);
+              } catch (e) {
+                console.error(e);
+              }
+              speakKitchenQueue(lines);
+            });
+          }
         }
       }
       prevPendingIdsRef.current = newIds;
     }
-  }, [listView, ensureAudioRunning, getOrCreateAudioContext]);
+  }, [listView, completedDateYmd, ensureAudioRunning, getOrCreateAudioContext]);
+
+  const repeatLastAnnouncement = useCallback(() => {
+    if (!soundOnRef.current || lastAnnouncementLines.length === 0) return;
+    void ensureAudioRunning().then((running) => {
+      if (!running || !soundOnRef.current) return;
+      const ctx = getOrCreateAudioContext();
+      if (ctx) {
+        try {
+          playRepeatCueChime(ctx);
+        } catch (e) {
+          console.error(e);
+        }
+      }
+      speakKitchenQueue(lastAnnouncementLines);
+    });
+  }, [lastAnnouncementLines, ensureAudioRunning, getOrCreateAudioContext]);
 
   useEffect(() => {
     load();
@@ -549,7 +649,7 @@ export function KitchenScreen() {
         if (typeof window !== "undefined" && window.speechSynthesis) {
           window.speechSynthesis.cancel();
         }
-        speakKitchen(`Order number ${orderNum} is ready!`);
+        speakKitchen(`Order number ${orderNum} is ready!`, { rate: KITCHEN_SPEECH_RATE });
       });
     }
     await load();
@@ -698,6 +798,32 @@ export function KitchenScreen() {
           <div style={{ display: "flex", alignItems: "center", gap: 14, flexShrink: 0 }}>
             <button
               type="button"
+              title="Repeat last order announcement"
+              aria-label="Repeat last order announcement"
+              disabled={!soundOn || lastAnnouncementLines.length === 0}
+              onClick={() => repeatLastAnnouncement()}
+              style={{
+                width: 64,
+                height: 64,
+                borderRadius: "50%",
+                border: `3px solid ${PAGE.white}`,
+                background:
+                  soundOn && lastAnnouncementLines.length > 0 ? "rgba(255,255,255,0.18)" : "#333",
+                fontSize: 28,
+                cursor:
+                  soundOn && lastAnnouncementLines.length > 0 ? "pointer" : "not-allowed",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                lineHeight: 1,
+                boxShadow: "0 4px 12px rgba(0,0,0,0.25)",
+                opacity: soundOn && lastAnnouncementLines.length > 0 ? 1 : 0.45,
+              }}
+            >
+              🔁
+            </button>
+            <button
+              type="button"
               onClick={toggleSound}
               aria-label={soundOn ? "Mute chimes and voice announcements" : "Unmute chimes and voice announcements"}
               style={{
@@ -733,32 +859,127 @@ export function KitchenScreen() {
             </div>
           </div>
         </div>
-        <button
-          type="button"
-          onClick={() => setListView((v) => (v === "pending" ? "completed" : "pending"))}
+        <div
+          role="tablist"
+          aria-label="Order list view"
           style={{
-            display: "block",
+            display: "flex",
             width: "100%",
-            maxWidth: 520,
-            padding: "20px 28px",
-            fontSize: 26,
-            fontWeight: 800,
-            borderRadius: 999,
-            border: "none",
-            background: PAGE.amberPill,
-            color: PAGE.amberPillInk,
-            cursor: "pointer",
-            boxShadow: "0 6px 0 #C49000, 0 8px 20px rgba(0,0,0,0.2)",
+            gap: 10,
+            boxSizing: "border-box",
           }}
         >
-          {listView === "pending" ? "View Completed" : "View Pending"}
-        </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={listView === "pending"}
+            onClick={() => setListView("pending")}
+            style={{
+              flex: 1,
+              minHeight: 60,
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              gap: 10,
+              borderRadius: 18,
+              border: "4px solid rgba(255,255,255,0.25)",
+              cursor: "pointer",
+              fontWeight: 800,
+              fontSize: 24,
+              boxShadow: listView === "pending" ? "0 6px 0 #C49000, 0 8px 16px rgba(0,0,0,0.2)" : "inset 0 2px 8px rgba(0,0,0,0.35)",
+              background: listView === "pending" ? "#FFC107" : "#2d2404",
+              color: listView === "pending" ? PAGE.ink : "rgba(255,220,120,0.85)",
+            }}
+          >
+            <span style={{ fontSize: 32, lineHeight: 1 }} aria-hidden>
+              🟡
+            </span>
+            Preparing
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={listView === "completed"}
+            onClick={() => setListView("completed")}
+            style={{
+              flex: 1,
+              minHeight: 60,
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              gap: 10,
+              borderRadius: 18,
+              border: "4px solid rgba(255,255,255,0.25)",
+              cursor: "pointer",
+              fontWeight: 800,
+              fontSize: 24,
+              boxShadow: listView === "completed" ? "0 6px 0 #146c43, 0 8px 16px rgba(0,0,0,0.2)" : "inset 0 2px 8px rgba(0,0,0,0.35)",
+              background: listView === "completed" ? "#22C55E" : "#0f2918",
+              color: listView === "completed" ? PAGE.white : "rgba(134,239,172,0.85)",
+            }}
+          >
+            <span style={{ fontSize: 32, lineHeight: 1 }} aria-hidden>
+              ✅
+            </span>
+            Done
+          </button>
+        </div>
+        {listView === "completed" && (
+          <div style={{ marginTop: 20 }}>
+            <label
+              htmlFor="kitchen-completed-date"
+              style={{
+                display: "block",
+                fontSize: 18,
+                fontWeight: 700,
+                marginBottom: 10,
+                color: "rgba(255,255,255,0.95)",
+              }}
+            >
+              Show orders for this day
+            </label>
+            <input
+              id="kitchen-completed-date"
+              type="date"
+              value={completedDateYmd}
+              onChange={(e) => setCompletedDateYmd(e.target.value || todayYmdLocal())}
+              style={{
+                width: "100%",
+                maxWidth: 420,
+                minHeight: 52,
+                fontSize: 22,
+                fontWeight: 700,
+                padding: "8px 14px",
+                borderRadius: 14,
+                border: `3px solid ${PAGE.white}`,
+                background: PAGE.white,
+                color: PAGE.ink,
+                boxSizing: "border-box",
+              }}
+            />
+          </div>
+        )}
       </header>
+
+      {listView === "completed" && (
+        <div
+          style={{
+            marginBottom: 20,
+            fontSize: 28,
+            fontWeight: 800,
+            color: PAGE.white,
+            fontFamily: "Georgia, 'Times New Roman', serif",
+            textAlign: "center",
+          }}
+        >
+          Orders for {formatOrdersHeadingDate(completedDateYmd)}
+        </div>
+      )}
 
       {orders.length === 0 ? (
         <div style={{ textAlign: "center", marginTop: "12vh", padding: "0 16px" }}>
           <div style={{ fontSize: 48, fontWeight: 800, color: PAGE.white, lineHeight: 1.3 }}>
-            {listView === "pending" ? "All caught up! 🎉" : "No completed orders today."}
+            {listView === "pending" ? "All caught up! 🎉" : "No completed orders for this day."}
           </div>
           {listView === "pending" && (
             <p
@@ -776,29 +997,56 @@ export function KitchenScreen() {
         </div>
       ) : (
         <div style={{ display: "flex", flexDirection: "column", gap: 28 }}>
-          {orders.map((o, cardIndex) => {
+          {orders.map((o) => {
             const isDone = listView === "completed";
-            const pal = CARD_PALETTE[cardIndex % CARD_PALETTE.length];
 
             return (
               <article
                 key={o.id}
                 style={{
-                  background: isDone ? PAGE.completedBg : pal.bg,
-                  color: isDone ? PAGE.completedInk : pal.ink,
+                  background: isDone ? PAGE.completedBg : PENDING_CARD.bg,
+                  color: isDone ? PAGE.completedInk : PAGE.white,
                   borderRadius: 24,
                   padding: 28,
-                  border: `4px solid ${isDone ? "#CCCCCC" : pal.border}`,
+                  border: `4px solid ${isDone ? "#CCCCCC" : PENDING_CARD.border}`,
                   boxShadow: "0 8px 24px rgba(0,0,0,0.12)",
                   position: "relative",
                 }}
               >
+                <button
+                  type="button"
+                  title="Adjust order"
+                  aria-label="Adjust order"
+                  disabled={busyId === o.id || editSaving}
+                  onClick={() => openEditOrder(o)}
+                  style={{
+                    position: "absolute",
+                    top: 16,
+                    right: 16,
+                    width: 40,
+                    height: 40,
+                    borderRadius: "50%",
+                    padding: 0,
+                    border: "none",
+                    background: PAGE.amberPill,
+                    cursor: busyId === o.id || editSaving ? "wait" : "pointer",
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    fontSize: 18,
+                    lineHeight: 1,
+                    boxShadow: "0 2px 8px rgba(0,0,0,0.25)",
+                    zIndex: 2,
+                  }}
+                >
+                  ✏️
+                </button>
                 {isDone && (
                   <div
                     style={{
                       position: "absolute",
                       top: 16,
-                      right: 16,
+                      left: 16,
                       background: PAGE.badgeGreen,
                       color: PAGE.white,
                       fontSize: 22,
@@ -818,6 +1066,8 @@ export function KitchenScreen() {
                     gap: 24,
                     marginBottom: 24,
                     flexWrap: "wrap",
+                    paddingRight: 52,
+                    paddingTop: isDone ? 56 : 0,
                   }}
                 >
                   <div
@@ -825,7 +1075,7 @@ export function KitchenScreen() {
                       width: 80,
                       height: 80,
                       borderRadius: "50%",
-                      background: isDone ? "#495057" : "#1B5E20",
+                      background: isDone ? "#495057" : PENDING_CARD.orderCircle,
                       color: PAGE.white,
                       display: "flex",
                       alignItems: "center",
@@ -844,7 +1094,7 @@ export function KitchenScreen() {
                         fontSize: 22,
                         fontWeight: 800,
                         marginBottom: 8,
-                        color: isDone ? PAGE.completedInk : pal.ink,
+                        color: isDone ? PAGE.completedInk : PAGE.white,
                       }}
                     >
                       Order #{o.order_number}
@@ -853,7 +1103,7 @@ export function KitchenScreen() {
                       style={{
                         fontSize: 20,
                         fontWeight: 700,
-                        color: isDone ? PAGE.completedInk : pal.accent,
+                        color: isDone ? PAGE.completedInk : "rgba(255,255,255,0.9)",
                       }}
                     >
                       {formatTime(o.created_at)}
@@ -870,7 +1120,7 @@ export function KitchenScreen() {
                         alignItems: "center",
                         gap: 16,
                         padding: "18px 0",
-                        borderTop: i ? `2px solid ${isDone ? "#DEE2E6" : "rgba(0,0,0,0.12)"}` : "none",
+                        borderTop: i ? `2px solid ${isDone ? "#DEE2E6" : PENDING_CARD.divider}` : "none",
                       }}
                     >
                       <span
@@ -880,7 +1130,7 @@ export function KitchenScreen() {
                           height: 20,
                           borderRadius: "50%",
                           flexShrink: 0,
-                          background: isDone ? "#6C757D" : pal.itemDot,
+                          background: isDone ? "#6C757D" : PENDING_CARD.itemDot,
                         }}
                       />
                       <span
@@ -889,7 +1139,7 @@ export function KitchenScreen() {
                           fontSize: K.itemName,
                           fontWeight: 800,
                           lineHeight: 1.25,
-                          color: isDone ? PAGE.completedInk : pal.ink,
+                          color: isDone ? PAGE.completedInk : PAGE.white,
                         }}
                       >
                         {it.name}
@@ -913,94 +1163,48 @@ export function KitchenScreen() {
                 </ul>
 
                 {isDone ? (
-                  <>
-                    <button
-                      type="button"
-                      disabled={busyId === o.id || editSaving}
-                      onClick={() => openEditOrder(o)}
-                      style={{
-                        width: "100%",
-                        minHeight: 72,
-                        padding: "16px 20px",
-                        fontSize: 26,
-                        fontWeight: 800,
-                        borderRadius: 20,
-                        border: `4px solid ${PAGE.amberPill}`,
-                        background: PAGE.amberPill,
-                        color: PAGE.amberPillInk,
-                        cursor: busyId === o.id || editSaving ? "wait" : "pointer",
-                        marginBottom: 14,
-                        boxShadow: "0 4px 0 #C49000",
-                      }}
-                    >
-                      ✏️ Adjust order
-                    </button>
-                    <button
-                      type="button"
-                      disabled={busyId === o.id}
-                      onClick={() => reopenOrder(o.id)}
-                      style={{
-                        width: "100%",
-                        minHeight: 80,
-                        padding: "20px 24px",
-                        fontSize: 28,
-                        fontWeight: 800,
-                        border: "none",
-                        borderRadius: 20,
-                        background: PAGE.reopenAmber,
-                        color: PAGE.reopenAmberInk,
-                        cursor: busyId === o.id ? "wait" : "pointer",
-                        opacity: busyId === o.id ? 0.75 : 1,
-                        boxShadow: "0 6px 0 #CC9900, 0 8px 20px rgba(0,0,0,0.15)",
-                      }}
-                    >
-                      {busyId === o.id ? "…" : "🔄 Reopen"}
-                    </button>
-                  </>
+                  <button
+                    type="button"
+                    disabled={busyId === o.id}
+                    onClick={() => reopenOrder(o.id)}
+                    style={{
+                      width: "100%",
+                      minHeight: 80,
+                      padding: "20px 24px",
+                      fontSize: 28,
+                      fontWeight: 800,
+                      border: "none",
+                      borderRadius: 20,
+                      background: PAGE.reopenAmber,
+                      color: PAGE.reopenAmberInk,
+                      cursor: busyId === o.id ? "wait" : "pointer",
+                      opacity: busyId === o.id ? 0.75 : 1,
+                      boxShadow: "0 6px 0 #CC9900, 0 8px 20px rgba(0,0,0,0.15)",
+                    }}
+                  >
+                    {busyId === o.id ? "…" : "🔄 Reopen"}
+                  </button>
                 ) : (
-                  <>
-                    <button
-                      type="button"
-                      disabled={busyId === o.id || editSaving}
-                      onClick={() => openEditOrder(o)}
-                      style={{
-                        width: "100%",
-                        minHeight: 72,
-                        padding: "16px 20px",
-                        fontSize: 26,
-                        fontWeight: 800,
-                        borderRadius: 20,
-                        border: `4px solid ${PAGE.amberPill}`,
-                        background: PAGE.amberPill,
-                        color: PAGE.amberPillInk,
-                        cursor: busyId === o.id || editSaving ? "wait" : "pointer",
-                        marginBottom: 14,
-                        boxShadow: "0 4px 0 #C49000",
-                      }}
-                    >
-                      ✏️ Adjust order (sold out)
-                    </button>
-                    <button
-                      type="button"
-                      disabled={busyId === o.id}
-                      onClick={() => markReady(o.id)}
-                      style={{
-                        width: "100%",
-                        minHeight: 80,
-                        fontSize: 28,
-                        fontWeight: 800,
-                        border: "none",
-                        borderRadius: 20,
-                        background: PAGE.readyGreen,
-                        color: PAGE.white,
-                        cursor: busyId === o.id ? "wait" : "pointer",
-                        opacity: busyId === o.id ? 0.75 : 1,
-                        boxShadow: "0 6px 0 #1E7E34, 0 8px 20px rgba(0,0,0,0.2)",
-                      }}
-                    >
-                      {busyId === o.id ? "…" : "✅ Mark as Ready"}
-                    </button>
-                  </>
+                  <button
+                    type="button"
+                    disabled={busyId === o.id}
+                    onClick={() => markReady(o.id)}
+                    style={{
+                      width: "100%",
+                      minHeight: 80,
+                      fontSize: 28,
+                      fontWeight: 800,
+                      border: "none",
+                      borderRadius: 20,
+                      background: PAGE.readyGreen,
+                      color: PAGE.white,
+                      cursor: busyId === o.id ? "wait" : "pointer",
+                      opacity: busyId === o.id ? 0.75 : 1,
+                      boxShadow: "0 6px 0 #1E7E34, 0 8px 20px rgba(0,0,0,0.2)",
+                    }}
+                  >
+                    {busyId === o.id ? "…" : "✅ Mark as Ready"}
+                  </button>
                 )}
               </article>
             );
