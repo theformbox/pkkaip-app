@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback, useMemo } from "react";
+import { useState, useEffect, useLayoutEffect, useRef, useCallback, useMemo } from "react";
 import Cropper from "react-easy-crop";
 import "react-easy-crop/react-easy-crop.css";
 import QRCode from "qrcode";
@@ -386,6 +386,59 @@ function persistPendingOrder({ order_number, items, total, paid, change_given, c
     .then(({ error }) => {
       if (error) console.error("persistPendingOrder failed:", error);
     });
+}
+
+function OrderSummaryScreen({ cafeHeaderTitle, total, orderItems, onBackToMenu, onConfirmPay }) {
+  useLayoutEffect(() => {
+    window.scrollTo(0, 0);
+    if (typeof document !== "undefined") {
+      document.documentElement.scrollTop = 0;
+      document.body.scrollTop = 0;
+    }
+  }, []);
+
+  useEffect(() => {
+    window.scrollTo(0, 0);
+  }, []);
+
+  return (
+    <div style={{ minHeight: "100vh", background: G.cream }}>
+      <Header title={cafeHeaderTitle} sub={`Order summary · Total: RM ${total.toFixed(2)}`} onBack={onBackToMenu} />
+      <div style={{ padding: "16px 16px 24px" }}>
+        {orderItems.map((item) => (
+          <div
+            key={item.id}
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 12,
+              marginBottom: 14,
+              background: G.white,
+              borderRadius: 14,
+              padding: 12,
+              border: `1px solid ${G.greenPale}`,
+              boxShadow: "0 1px 6px rgba(0,0,0,0.05)",
+            }}
+          >
+            {item.image
+              ? <img src={item.image} alt="" style={{ width: 64, height: 64, borderRadius: 12, objectFit: "cover", flexShrink: 0 }} onError={(e) => { e.target.style.display = "none"; }} />
+              : <div style={{ width: 64, height: 64, borderRadius: 12, background: G.greenPale, flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 24 }}>☕</div>}
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ fontSize: 16, fontWeight: "bold", color: G.text, fontFamily: "Georgia,serif" }}>{item.name}</div>
+              <div style={{ fontSize: 13, color: G.textLight }}>RM {item.price.toFixed(2)} × {item.qty}</div>
+            </div>
+            <div style={{ fontSize: 16, fontWeight: "bold", fontFamily: "monospace", color: G.amber }}>RM {(item.price * item.qty).toFixed(2)}</div>
+          </div>
+        ))}
+        <div style={{ borderTop: `2px dashed ${G.greenPale}`, margin: "20px 0 16px", paddingTop: 16, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          <span style={{ fontSize: 17, fontWeight: "bold" }}>Total</span>
+          <span style={{ fontSize: 26, fontWeight: "bold", color: G.green, fontFamily: "monospace" }}>RM {total.toFixed(2)}</span>
+        </div>
+        <ActionBtn label="Confirm & Pay →" color={G.green} onClick={onConfirmPay} />
+        <ActionBtn label="← Edit Order" outline onClick={onBackToMenu} />
+      </div>
+    </div>
+  );
 }
 
 // ══════════════════════════════════════════════════════════════
@@ -838,44 +891,18 @@ function CafeScreen({ onBack, categories, setCategories, logo }) {
     </div>
   );
 
-  if (screen === "summary") return (
-    <div>
-      <Header title={cafeHeaderTitle} sub={`Order summary · Total: RM ${total.toFixed(2)}`} onBack={() => setScreen("menu")} />
-      <div style={{ padding: "16px 16px 24px" }}>
-        {orderItems.map(item => (
-          <div
-            key={item.id}
-            style={{
-              display: "flex",
-              alignItems: "center",
-              gap: 12,
-              marginBottom: 14,
-              background: G.white,
-              borderRadius: 14,
-              padding: 12,
-              border: `1px solid ${G.greenPale}`,
-              boxShadow: "0 1px 6px rgba(0,0,0,0.05)",
-            }}
-          >
-            {item.image
-              ? <img src={item.image} alt="" style={{ width: 64, height: 64, borderRadius: 12, objectFit: "cover", flexShrink: 0 }} onError={e => { e.target.style.display = "none"; }} />
-              : <div style={{ width: 64, height: 64, borderRadius: 12, background: G.greenPale, flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 24 }}>☕</div>}
-            <div style={{ flex: 1, minWidth: 0 }}>
-              <div style={{ fontSize: 16, fontWeight: "bold", color: G.text, fontFamily: "Georgia,serif" }}>{item.name}</div>
-              <div style={{ fontSize: 13, color: G.textLight }}>RM {item.price.toFixed(2)} × {item.qty}</div>
-            </div>
-            <div style={{ fontSize: 16, fontWeight: "bold", fontFamily: "monospace", color: G.amber }}>RM {(item.price * item.qty).toFixed(2)}</div>
-          </div>
-        ))}
-        <div style={{ borderTop: `2px dashed ${G.greenPale}`, margin: "20px 0 16px", paddingTop: 16, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-          <span style={{ fontSize: 17, fontWeight: "bold" }}>Total</span>
-          <span style={{ fontSize: 26, fontWeight: "bold", color: G.green, fontFamily: "monospace" }}>RM {total.toFixed(2)}</span>
-        </div>
-        <ActionBtn label="Confirm & Pay →" color={G.green} onClick={() => setScreen("payment")} />
-        <ActionBtn label="← Edit Order" outline onClick={() => setScreen("menu")} />
-      </div>
-    </div>
-  );
+  if (screen === "summary") {
+    return (
+      <OrderSummaryScreen
+        key="summary"
+        cafeHeaderTitle={cafeHeaderTitle}
+        total={total}
+        orderItems={orderItems}
+        onBackToMenu={() => setScreen("menu")}
+        onConfirmPay={() => setScreen("payment")}
+      />
+    );
+  }
 
   return (
     <div>

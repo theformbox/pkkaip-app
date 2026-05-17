@@ -11,7 +11,7 @@ type OrderRow = {
   total: number;
   items: { id?: string; name: string; price: number; qty: number; image?: string }[];
   customer_name?: string | null;
-  staff_name?: string | null;
+  staff_name: string | null;
   completed_at?: string | null;
 };
 
@@ -662,7 +662,9 @@ export function KitchenScreen() {
         // Read-only fetch: never INSERT/UPDATE/DELETE order rows here (no accidental status changes).
         let q = supabase
           .from("orders")
-          .select("id, order_number, created_at, status, total, items, customer_name, staff_name, completed_at");
+          .select(
+            "id, order_number, created_at, status, total, items, customer_name, staff_name, completed_at",
+          );
 
         if (listView === "pending") {
           q = q
@@ -1358,11 +1360,11 @@ export function KitchenScreen() {
                           fontSize: 14,
                           fontWeight: 600,
                           fontFamily: "Georgia, 'Times New Roman', serif",
-                          color: isDone ? "rgba(26,26,26,0.62)" : "rgba(255,255,255,0.88)",
+                          color: isDone ? "rgba(26,26,26,0.75)" : PAGE.white,
                           marginTop: customerTrim ? 6 : 8,
                         }}
                       >
-                        Taken by: {staffTrim}
+                        By: {staffTrim}
                       </div>
                     ) : null}
                   </div>
