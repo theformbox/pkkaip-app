@@ -1093,6 +1093,43 @@ export function KitchenScreen() {
             >
               {soundOn ? "🔊" : "🔇"}
             </button>
+            <button
+              type="button"
+              onClick={() => void load(true)}
+              disabled={ordersLoading}
+              aria-label="Refresh orders from server"
+              style={{
+                minHeight: 64,
+                padding: "0 22px",
+                borderRadius: 999,
+                border: `3px solid ${PAGE.white}`,
+                background: PAGE.amberPill,
+                color: PAGE.amberPillInk,
+                fontSize: 20,
+                fontWeight: 800,
+                cursor: ordersLoading ? "wait" : "pointer",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                gap: 8,
+                lineHeight: 1.2,
+                boxShadow: "0 4px 12px rgba(0,0,0,0.25)",
+                opacity: ordersLoading ? 0.92 : 1,
+                fontFamily: "Georgia, 'Times New Roman', serif",
+              }}
+            >
+              <span
+                aria-hidden
+                style={{
+                  display: "inline-block",
+                  fontSize: 24,
+                  animation: ordersLoading ? "kitchenOrdersSpin 0.8s linear infinite" : "none",
+                }}
+              >
+                🔄
+              </span>
+              Refresh
+            </button>
             <div
               style={{
                 fontSize: 28,
