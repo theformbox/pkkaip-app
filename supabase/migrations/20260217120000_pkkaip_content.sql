@@ -22,7 +22,8 @@ create table if not exists public.menu_items (
   category_id uuid not null references public.menu_categories (id) on delete cascade,
   name text not null,
   price numeric not null default 0,
-  sort_order int not null default 0
+  sort_order int not null default 0,
+  image text default '' not null
 );
 
 create table if not exists public.app_settings (

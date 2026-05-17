@@ -53,7 +53,7 @@ function categoriesFromJoin(cats, items) {
   }
   for (const it of items) {
     const bucket = map.get(it.category_id);
-    if (bucket) bucket.items.push({ id: it.id, name: it.name, price: Number(it.price) });
+    if (bucket) bucket.items.push({ id: it.id, name: it.name, price: Number(it.price), image: it.image ?? "" });
   }
   return Array.from(map.values());
 }
@@ -248,11 +248,20 @@ function CafeScreen({ onBack, categories }) {
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, padding: 16 }}>
         {(cat?.items || []).map(item => {
           const qty = order[item.id]?.qty || 0;
+          const hasImg = Boolean(item.image);
           return (
-            <button key={item.id} onClick={() => add(item)} style={{ background: qty > 0 ? G.green : G.white, borderRadius: 16, padding: "14px 12px", border: `2px solid ${qty > 0 ? G.green : G.greenPale}`, cursor: "pointer", boxShadow: qty > 0 ? "0 4px 12px rgba(45,90,39,0.25)" : "0 2px 8px rgba(0,0,0,0.06)", position: "relative", textAlign: "left" }}>
-              {qty > 0 && <div style={{ position: "absolute", top: -8, right: -8, background: G.amber, color: G.white, borderRadius: "50%", width: 26, height: 26, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 13, fontWeight: "bold" }}>{qty}</div>}
-              <div style={{ fontSize: 14, fontWeight: "bold", color: qty > 0 ? G.white : G.text, marginBottom: 4, lineHeight: 1.3 }}>{item.name}</div>
-              <div style={{ fontSize: 16, fontWeight: "bold", color: qty > 0 ? G.amberLight : G.amber, fontFamily: "monospace" }}>RM {item.price.toFixed(2)}</div>
+            <button key={item.id} onClick={() => add(item)} style={{ background: G.white, borderRadius: 16, padding: 0, border: `2px solid ${qty > 0 ? G.green : G.greenPale}`, cursor: "pointer", boxShadow: qty > 0 ? "0 4px 12px rgba(45,90,39,0.25)" : "0 2px 8px rgba(0,0,0,0.06)", position: "relative", textAlign: "left", display: "flex", flexDirection: "column", alignItems: "stretch", overflow: "hidden", minHeight: hasImg ? 138 : undefined }}>
+              {qty > 0 && <div style={{ position: "absolute", top: -8, right: -8, background: G.amber, color: G.white, borderRadius: "50%", width: 26, height: 26, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 13, fontWeight: "bold", zIndex: 2 }}>{qty}</div>}
+              {hasImg && (
+                <div
+                  aria-hidden
+                  style={{ height: 92, flexShrink: 0, backgroundImage: `url(${item.image})`, backgroundSize: "cover", backgroundPosition: "center", backgroundRepeat: "no-repeat" }}
+                />
+              )}
+              <div style={{ padding: hasImg ? "12px 12px 14px" : "14px 12px", flex: 1, background: qty > 0 ? G.green : G.white, display: "flex", flexDirection: "column", justifyContent: "center" }}>
+                <div style={{ fontSize: 14, fontWeight: "bold", color: qty > 0 ? G.white : G.text, marginBottom: 4, lineHeight: 1.3 }}>{item.name}</div>
+                <div style={{ fontSize: 16, fontWeight: "bold", color: qty > 0 ? G.amberLight : G.amber, fontFamily: "monospace" }}>RM {item.price.toFixed(2)}</div>
+              </div>
             </button>
           );
         })}
@@ -359,20 +368,26 @@ function GardenScreen({ onBack, plants }) {
 // IMAGE PICKER
 // ══════════════════════════════════════════════════════════════
 
-function ImagePicker({ plantName, onSelect, onClose }) {
+function ImagePicker({ searchLabel, unsplashQuery, onSelect, onClose }) {
   const [images, setImages] = useState([]);
   const [selected, setSelected] = useState(null);
   const [customUrl, setCustomUrl] = useState("");
   const [loadedMap, setLoadedMap] = useState({});
 
+  const displayName = searchLabel?.trim() || "this";
+
   useEffect(() => {
-    // Generate Unsplash source URLs — these redirect to real images
+    const label = searchLabel?.trim() || "this";
+    const q =
+      unsplashQuery != null && String(unsplashQuery).trim() !== ""
+        ? String(unsplashQuery).trim()
+        : `${label} plant herb garden`.trim() || "nature";
     const urls = Array.from({ length: 9 }, (_, i) =>
-      `https://source.unsplash.com/160x160/?${encodeURIComponent(plantName + " plant herb garden")}&sig=${i + Math.floor(Math.random() * 9999)}`
+      `https://source.unsplash.com/160x160/?${encodeURIComponent(q)}&sig=${i + Math.floor(Math.random() * 9999)}`
     );
     setImages(urls);
     setLoadedMap({});
-  }, [plantName]);
+  }, [searchLabel, unsplashQuery]);
 
   const chosen = customUrl || selected;
 
@@ -383,7 +398,7 @@ function ImagePicker({ plantName, onSelect, onClose }) {
           <div style={{ fontSize: 16, fontWeight: "bold", fontFamily: "Georgia,serif", color: G.text }}>Choose a Photo</div>
           <button onClick={onClose} style={{ background: G.greenPale, border: "none", borderRadius: 8, padding: "4px 10px", cursor: "pointer", color: G.green, fontWeight: "bold", fontSize: 16 }}>✕</button>
         </div>
-        <div style={{ fontSize: 12, color: G.textLight, fontStyle: "italic", marginBottom: 14 }}>Showing photos for "{plantName}" — tap one to select</div>
+        <div style={{ fontSize: 12, color: G.textLight, fontStyle: "italic", marginBottom: 14 }}>Showing photos for "{displayName}" — tap one to select</div>
 
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8, marginBottom: 18 }}>
           {images.map((url, i) => (
@@ -476,7 +491,7 @@ function PlantAdmin({ plants, setPlants, onBack }) {
       <Header title={editPlant ? "Edit Plant" : "Add New Plant"} onBack={() => setView("list")} />
       {showPicker && (
         <ImagePicker
-          plantName={form.name || "plant"}
+          searchLabel={form.name || "plant"}
           onSelect={url => { setForm(f => ({ ...f, image: url })); setShowPicker(false); }}
           onClose={() => setShowPicker(false)}
         />
@@ -555,27 +570,29 @@ function MenuAdmin({ categories, setCategories, onBack }) {
   const [editCat, setEditCat] = useState(null);
   const [editItem, setEditItem] = useState(null);
   const [catForm, setCatForm] = useState({ name: "", emoji: "🍽️" });
-  const [itemForm, setItemForm] = useState({ name: "", price: "" });
+  const [itemForm, setItemForm] = useState({ name: "", price: "", image: "" });
+  const [showPicker, setShowPicker] = useState(false);
 
   const EMOJIS = ["🍽️","🥗","🍜","🥤","🧁","🍱","🥞","🫖","🍛","🥙","🧆","🍰"];
 
   const saveItem = async () => {
     if (!itemForm.name.trim() || !itemForm.price) return;
     const price = parseFloat(itemForm.price);
+    const image = itemForm.image?.trim() || "";
     if (editItem) {
-      const { error } = await supabase.from("menu_items").update({ name: itemForm.name, price }).eq("id", editItem.id);
+      const { error } = await supabase.from("menu_items").update({ name: itemForm.name, price, image }).eq("id", editItem.id);
       if (error) { alert(error.message); return; }
       setCategories(cats => cats.map(c => {
         if (c.id !== editCat.id) return c;
-        return { ...c, items: c.items.map(i => i.id === editItem.id ? { ...i, name: itemForm.name, price } : i) };
+        return { ...c, items: c.items.map(i => i.id === editItem.id ? { ...i, name: itemForm.name, price, image } : i) };
       }));
     } else {
       const sort_order = (categories.find(c => c.id === editCat.id)?.items.length) ?? 0;
-      const { data, error } = await supabase.from("menu_items").insert({ category_id: editCat.id, name: itemForm.name, price, sort_order }).select().single();
+      const { data, error } = await supabase.from("menu_items").insert({ category_id: editCat.id, name: itemForm.name, price, sort_order, image }).select().single();
       if (error) { alert(error.message); return; }
       setCategories(cats => cats.map(c => {
         if (c.id !== editCat.id) return c;
-        return { ...c, items: [...c.items, { id: data.id, name: data.name, price: Number(data.price) }] };
+        return { ...c, items: [...c.items, { id: data.id, name: data.name, price: Number(data.price), image: data.image ?? "" }] };
       }));
     }
     setView("editCat");
@@ -626,11 +643,25 @@ function MenuAdmin({ categories, setCategories, onBack }) {
   if (view === "itemForm") return (
     <div>
       <Header title={editItem ? "Edit Item" : "Add Item"} onBack={() => setView("editCat")} />
+      {showPicker && (
+        <ImagePicker
+          searchLabel={itemForm.name || "food"}
+          unsplashQuery={itemForm.name.trim() || "food"}
+          onSelect={url => { setItemForm(f => ({ ...f, image: url })); setShowPicker(false); }}
+          onClose={() => setShowPicker(false)}
+        />
+      )}
       <div style={{ padding: 20 }}>
         <label style={lbl}>Item Name</label>
         <input style={inp} value={itemForm.name} onChange={e => setItemForm(f => ({ ...f, name: e.target.value }))} placeholder="e.g. Nasi Lemak" />
         <label style={lbl}>Price (RM)</label>
         <input style={inp} type="number" inputMode="decimal" value={itemForm.price} onChange={e => setItemForm(f => ({ ...f, price: e.target.value }))} placeholder="e.g. 5.00" />
+        <label style={lbl}>Photo</label>
+        {itemForm.image && <img src={itemForm.image} alt="" style={{ width: "100%", height: 160, objectFit: "cover", borderRadius: 12, marginBottom: 10 }} onError={e => { e.target.style.display = "none"; }} />}
+        <button onClick={() => itemForm.name.trim() ? setShowPicker(true) : alert("Please enter the item name first so we can find photos for it!")}
+          style={{ width: "100%", padding: "13px", borderRadius: 12, border: `2px dashed ${G.green}`, background: G.greenPale, color: G.green, fontSize: 14, cursor: "pointer", marginBottom: 20, fontFamily: "Georgia,serif" }}>
+          {itemForm.image ? "🔄 Change Photo" : "📷 Choose Photo"}
+        </button>
         <ActionBtn label="Save" color={G.green} onClick={saveItem} />
         {editItem && <ActionBtn label="Delete Item" color={G.red} onClick={async () => { await delItem(editCat.id, editItem.id); setView("editCat"); }} />}
         <ActionBtn label="Cancel" outline onClick={() => setView("editCat")} />
@@ -650,10 +681,10 @@ function MenuAdmin({ categories, setCategories, onBack }) {
                 <div style={{ fontSize: 15, fontWeight: "bold", color: G.text }}>{item.name}</div>
                 <div style={{ fontSize: 13, color: G.amber, fontFamily: "monospace" }}>RM {item.price.toFixed(2)}</div>
               </div>
-              <button onClick={() => { setEditItem(item); setItemForm({ name: item.name, price: String(item.price) }); setView("itemForm"); }} style={{ background: G.greenPale, border: "none", borderRadius: 8, padding: "6px 14px", color: G.green, cursor: "pointer", fontSize: 13, fontWeight: "bold" }}>Edit</button>
+              <button onClick={() => { setEditItem(item); setItemForm({ name: item.name, price: String(item.price), image: item.image || "" }); setView("itemForm"); }} style={{ background: G.greenPale, border: "none", borderRadius: 8, padding: "6px 14px", color: G.green, cursor: "pointer", fontSize: 13, fontWeight: "bold" }}>Edit</button>
             </div>
           ))}
-          <ActionBtn label="+ Add Item" color={G.green} onClick={() => { setEditItem(null); setItemForm({ name: "", price: "" }); setView("itemForm"); }} />
+          <ActionBtn label="+ Add Item" color={G.green} onClick={() => { setEditItem(null); setItemForm({ name: "", price: "", image: "" }); setView("itemForm"); }} />
           <ActionBtn label="Delete This Category" color={G.red} onClick={delCat} />
         </div>
       </div>
