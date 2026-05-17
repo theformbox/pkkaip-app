@@ -140,16 +140,6 @@ function speakQueuedKitchenUtterances(texts: string[]) {
   }
 }
 
-function speakOrderReadyAnnouncement(orderNumber: number) {
-  if (typeof window === "undefined" || !window.speechSynthesis) return;
-  prepareSpeechSynthesis();
-  const utterance = new SpeechSynthesisUtterance(`Order number ${orderNumber} is ready!`);
-  utterance.rate = ANNOUNCEMENT_SPEECH_RATE;
-  utterance.pitch = 1;
-  utterance.volume = 1;
-  window.speechSynthesis.speak(utterance);
-}
-
 /** Stronger attention pattern: alert beeps + longer ascending fanfare. */
 function playNewOrderChime(ctx: AudioContext) {
   const t0 = ctx.currentTime;
@@ -185,24 +175,6 @@ function playNewOrderChime(ctx: AudioContext) {
   for (const f of fanfare) {
     playTone(f, t, 0.42, "triangle", peakMain);
     t += 0.19;
-  }
-}
-
-function playRepeatCueChime(ctx: AudioContext) {
-  const t0 = ctx.currentTime;
-  const peak = 0.12;
-  for (let i = 0; i < 2; i++) {
-    const o = ctx.createOscillator();
-    const g = ctx.createGain();
-    o.connect(g);
-    g.connect(ctx.destination);
-    o.type = "sine";
-    o.frequency.setValueAtTime(i === 0 ? 660 : 880, t0 + i * 0.14);
-    g.gain.setValueAtTime(0, t0 + i * 0.14);
-    g.gain.linearRampToValueAtTime(peak, t0 + i * 0.14 + 0.04);
-    g.gain.linearRampToValueAtTime(0.001, t0 + i * 0.14 + 0.2);
-    o.start(t0 + i * 0.14);
-    o.stop(t0 + i * 0.14 + 0.22);
   }
 }
 
@@ -468,7 +440,6 @@ export function KitchenScreen() {
   const [editingOrder, setEditingOrder] = useState<OrderRow | null>(null);
   const [editDraft, setEditDraft] = useState<OrderItem[]>([]);
   const [editSaving, setEditSaving] = useState(false);
-  const [lastAnnouncementLines, setLastAnnouncementLines] = useState<string[]>([]);
   const [listView, setListView] = useState<KitchenView>("pending");
   const [completedDateYmd, setCompletedDateYmd] = useState(todayYmdLocal);
   const [soundOn, setSoundOn] = useState(true);
@@ -594,7 +565,6 @@ export function KitchenScreen() {
             (a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime(),
           );
           const lines = sorted.map(formatNewOrderAnnouncementText);
-          setLastAnnouncementLines(lines);
           if (soundOnRef.current && audioUnlockedRef.current) {
             void ensureAudioRunning().then((running) => {
               if (!running || !soundOnRef.current || !audioUnlockedRef.current) return;
@@ -617,28 +587,9 @@ export function KitchenScreen() {
     }
   }, [listView, completedDateYmd, ensureAudioRunning, getOrCreateAudioContext]);
 
-  const repeatLastAnnouncement = useCallback(() => {
-    if (!soundOnRef.current || !audioUnlockedRef.current || lastAnnouncementLines.length === 0) return;
-    void ensureAudioRunning().then((running) => {
-      if (!running || !soundOnRef.current || !audioUnlockedRef.current) return;
-      const ctx = getOrCreateAudioContext();
-      if (ctx) {
-        try {
-          playRepeatCueChime(ctx);
-        } catch (e) {
-          console.error(e);
-        }
-      }
-      window.setTimeout(() => {
-        if (!soundOnRef.current || !audioUnlockedRef.current) return;
-        speakQueuedKitchenUtterances(lastAnnouncementLines);
-      }, 320);
-    });
-  }, [lastAnnouncementLines, ensureAudioRunning, getOrCreateAudioContext]);
-
   useEffect(() => {
     load();
-    const poll = setInterval(load, 10_000);
+    const poll = setInterval(load, 5000);
     return () => clearInterval(poll);
   }, [load]);
 
@@ -649,7 +600,16 @@ export function KitchenScreen() {
 
   const markReady = async (id: string) => {
     const row = orders.find((o) => o.id === id);
-    const orderNum = row?.order_number ?? 0;
+    if (!row) return;
+
+    if (soundOnRef.current && audioUnlockedRef.current && typeof window !== "undefined" && window.speechSynthesis) {
+      try {
+        window.speechSynthesis.resume();
+      } catch {
+        /* ignore */
+      }
+    }
+
     setBusyId(id);
     const { error } = await supabase.from("orders").update({ status: "ready" }).eq("id", id);
     setBusyId(null);
@@ -658,19 +618,36 @@ export function KitchenScreen() {
       alert(error.message);
       return;
     }
+
     if (soundOnRef.current && audioUnlockedRef.current) {
-      void ensureAudioRunning().then((running) => {
-        if (!running || !soundOnRef.current || !audioUnlockedRef.current) return;
+      const running = await ensureAudioRunning();
+      if (running) {
         const ctx = getOrCreateAudioContext();
-        if (!ctx) return;
-        try {
-          playReadyChime(ctx);
-        } catch (e) {
-          console.error(e);
+        if (ctx) {
+          try {
+            playReadyChime(ctx);
+          } catch (e) {
+            console.error(e);
+          }
         }
-        speakOrderReadyAnnouncement(orderNum);
-      });
+        if (typeof window !== "undefined" && window.speechSynthesis) {
+          try {
+            window.speechSynthesis.cancel();
+            window.speechSynthesis.resume();
+          } catch (e) {
+            console.error(e);
+          }
+          const utterance = new SpeechSynthesisUtterance(
+            `Order number ${row.order_number} is ready for collection!`,
+          );
+          utterance.rate = 0.9;
+          utterance.pitch = 1;
+          utterance.volume = 1;
+          window.speechSynthesis.speak(utterance);
+        }
+      }
     }
+
     await load();
   };
 
@@ -815,32 +792,6 @@ export function KitchenScreen() {
             👨‍🍳 Kitchen Orders
           </h1>
           <div style={{ display: "flex", alignItems: "center", gap: 14, flexShrink: 0 }}>
-            <button
-              type="button"
-              title="Repeat last order announcement"
-              aria-label="Repeat last order announcement"
-              disabled={!soundOn || !audioUnlocked || lastAnnouncementLines.length === 0}
-              onClick={() => repeatLastAnnouncement()}
-              style={{
-                width: 64,
-                height: 64,
-                borderRadius: "50%",
-                border: `3px solid ${PAGE.white}`,
-                background:
-                  soundOn && audioUnlocked && lastAnnouncementLines.length > 0 ? "rgba(255,255,255,0.18)" : "#333",
-                fontSize: 28,
-                cursor:
-                  soundOn && audioUnlocked && lastAnnouncementLines.length > 0 ? "pointer" : "not-allowed",
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-                lineHeight: 1,
-                boxShadow: "0 4px 12px rgba(0,0,0,0.25)",
-                opacity: soundOn && audioUnlocked && lastAnnouncementLines.length > 0 ? 1 : 0.45,
-              }}
-            >
-              🔁
-            </button>
             <button
               type="button"
               onClick={toggleSound}
