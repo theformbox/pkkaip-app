@@ -1318,7 +1318,7 @@ function OrdersAdmin({ onBack }) {
               </div>
               <ul style={{ margin: "0 0 10px", paddingLeft: 18, fontSize: 14, color: G.text }}>
                 {(o.items ?? []).map((it, i) => (
-                  <li key={`${it.id}-${i}`} style={{ marginBottom: 4 }}>
+                  <li key={`${it.id ?? `${it.name}-${i}`}-${i}`} style={{ marginBottom: 4 }}>
                     {it.qty}× {it.name}
                   </li>
                 ))}
