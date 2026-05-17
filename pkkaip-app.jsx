@@ -3,6 +3,23 @@ import Cropper from "react-easy-crop";
 import "react-easy-crop/react-easy-crop.css";
 import QRCode from "qrcode";
 import html2canvas from "html2canvas";
+import {
+  DndContext,
+  closestCenter,
+  KeyboardSensor,
+  MouseSensor,
+  TouchSensor,
+  useSensor,
+  useSensors,
+} from "@dnd-kit/core";
+import {
+  arrayMove,
+  SortableContext,
+  sortableKeyboardCoordinates,
+  verticalListSortingStrategy,
+  useSortable,
+} from "@dnd-kit/sortable";
+import { CSS } from "@dnd-kit/utilities";
 import { supabase } from "@/lib/supabase";
 
 // ── Palette ────────────────────────────────────────────────────
@@ -43,19 +60,115 @@ function plantFromRow(row) {
     care: row.care ?? "",
     uses: row.uses ?? "",
     image: row.image ?? "",
+    sort_order: Number(row.sort_order) || 0,
   };
 }
 
 function categoriesFromJoin(cats, items) {
   const map = new Map();
   for (const c of cats) {
-    map.set(c.id, { id: c.id, label: c.label, emoji: c.emoji ?? "🍽️", items: [] });
+    map.set(c.id, {
+      id: c.id,
+      label: c.label,
+      emoji: c.emoji ?? "🍽️",
+      sort_order: Number(c.sort_order) || 0,
+      items: [],
+    });
   }
   for (const it of items) {
     const bucket = map.get(it.category_id);
-    if (bucket) bucket.items.push({ id: it.id, name: it.name, price: Number(it.price), image: it.image ?? "" });
+    if (bucket) {
+      bucket.items.push({
+        id: it.id,
+        name: it.name,
+        price: Number(it.price),
+        image: it.image ?? "",
+        sort_order: Number(it.sort_order) || 0,
+      });
+    }
+  }
+  for (const bucket of map.values()) {
+    bucket.items.sort((a, b) => a.sort_order - b.sort_order);
   }
   return Array.from(map.values());
+}
+
+/** Persist 0..n sort_order for rows in order (batch of parallel updates). */
+async function persistSortOrders(table, orderedIds) {
+  const results = await Promise.all(
+    orderedIds.map((id, sort_order) => supabase.from(table).update({ sort_order }).eq("id", id)),
+  );
+  const err = results.find((r) => r.error)?.error;
+  if (err) {
+    console.error(err);
+    alert(err.message);
+  }
+}
+
+function useAdminSortableSensors() {
+  return useSensors(
+    useSensor(MouseSensor, { activationConstraint: { distance: 8 } }),
+    useSensor(TouchSensor, { activationConstraint: { delay: 280, tolerance: 8 } }),
+    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
+  );
+}
+
+const adminDragHandleStyle = {
+  touchAction: "none",
+  cursor: "grab",
+  flexShrink: 0,
+  width: 44,
+  minHeight: 48,
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "center",
+  background: G.greenPale,
+  border: "none",
+  borderRight: `1.5px solid ${G.greenPale}`,
+  color: G.green,
+  fontSize: 22,
+  fontWeight: "bold",
+  padding: 0,
+  alignSelf: "stretch",
+};
+
+function SortableMenuItemRow({ id, children }) {
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id });
+  const dndStyle = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+    opacity: isDragging ? 0.88 : 1,
+    boxShadow: isDragging ? "0 10px 26px rgba(0,0,0,0.2)" : "0 1px 4px rgba(0,0,0,0.05)",
+    position: "relative",
+    zIndex: isDragging ? 2 : 0,
+  };
+  return children({ setNodeRef, attributes, listeners, dndStyle });
+}
+
+function SortableCategoryRow({ id, children }) {
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id });
+  const dndStyle = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+    opacity: isDragging ? 0.88 : 1,
+    boxShadow: isDragging ? "0 10px 26px rgba(0,0,0,0.2)" : "0 1px 6px rgba(0,0,0,0.05)",
+    position: "relative",
+    zIndex: isDragging ? 2 : 0,
+  };
+  return children({ setNodeRef, attributes, listeners, dndStyle });
+}
+
+function SortablePlantRow({ id, children }) {
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id });
+  const dndStyle = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+    opacity: isDragging ? 0.88 : 1,
+    boxShadow: isDragging ? "0 10px 26px rgba(0,0,0,0.2)" : "0 1px 6px rgba(0,0,0,0.05)",
+    position: "relative",
+    zIndex: isDragging ? 2 : 0,
+  };
+  return children({ setNodeRef, attributes, listeners, dndStyle });
 }
 
 function LoadingScreen() {
@@ -916,6 +1029,22 @@ function PlantAdmin({ plants, setPlants, onBack }) {
   const [showPicker, setShowPicker] = useState(false);
   const [showQR, setShowQR] = useState(null);
 
+  const sensors = useAdminSortableSensors();
+
+  const onPlantsDragEnd = (event) => {
+    const { active, over } = event;
+    if (!over || active.id === over.id) return;
+    const oldIndex = plants.findIndex((p) => String(p.id) === String(active.id));
+    const newIndex = plants.findIndex((p) => String(p.id) === String(over.id));
+    if (oldIndex < 0 || newIndex < 0) return;
+    const next = arrayMove(plants, oldIndex, newIndex).map((p, idx) => ({ ...p, sort_order: idx }));
+    setPlants(next);
+    void persistSortOrders(
+      "plants",
+      next.map((p) => p.id),
+    );
+  };
+
   const ff = key => e => setForm(f => ({ ...f, [key]: e.target.value }));
 
   const openAdd = () => { setEditPlant(null); setForm({ name: "", malay: "", description: "", care: "", uses: "", image: "" }); setView("form"); };
@@ -928,7 +1057,8 @@ function PlantAdmin({ plants, setPlants, onBack }) {
       if (error) { alert(error.message); return; }
       setPlants(ps => ps.map(p => p.id === editPlant.id ? { ...p, ...form } : p));
     } else {
-      const { data, error } = await supabase.from("plants").insert({ ...form }).select().single();
+      const sort_order = plants.length;
+      const { data, error } = await supabase.from("plants").insert({ ...form, sort_order }).select().single();
       if (error) { alert(error.message); return; }
       setPlants(ps => [...ps, plantFromRow(data)]);
     }
@@ -989,28 +1119,64 @@ function PlantAdmin({ plants, setPlants, onBack }) {
 
   return (
     <div>
-      <Header title="🌿 Manage Plants" sub="Tap a plant to edit" onBack={onBack} />
+      <Header title="🌿 Manage Plants" sub="Hold ≡ to reorder · Tap a plant to edit" onBack={onBack} />
       {showQR && <QRModal plant={showQR} onClose={() => setShowQR(null)} />}
       <div style={{ padding: 16 }}>
         {plants.length === 0
           ? <div style={{ textAlign: "center", padding: "40px 0", color: G.textLight, fontStyle: "italic" }}>No plants yet. Add your first one!</div>
-          : plants.map(p => (
-            <div key={p.id} style={{ background: G.white, borderRadius: 14, marginBottom: 10, border: `1px solid ${G.greenPale}`, boxShadow: "0 1px 6px rgba(0,0,0,0.05)", overflow: "hidden", display: "flex", alignItems: "stretch" }}>
-              <button onClick={() => openEdit(p)} style={{ flex: 1, display: "flex", alignItems: "center", cursor: "pointer", background: "none", border: "none", textAlign: "left", padding: 0 }}>
-                {p.image
-                  ? <img src={p.image} alt="" style={{ width: 70, height: 70, objectFit: "cover", flexShrink: 0 }} onError={e => e.target.style.display = "none"} />
-                  : <div style={{ width: 70, height: 70, background: G.greenPale, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 26, flexShrink: 0 }}>🌿</div>
-                }
-                <div style={{ padding: "10px 12px" }}>
-                  <div style={{ fontSize: 15, fontWeight: "bold", color: G.green, fontFamily: "Georgia,serif" }}>{p.name}</div>
-                  {p.malay && <div style={{ fontSize: 11, color: G.brownLight, fontStyle: "italic" }}>{p.malay}</div>}
-                </div>
-              </button>
-              <button type="button" onClick={() => setShowQR(p)} style={{ background: G.white, border: `2px solid ${G.green}`, borderRadius: 10, padding: "6px 12px", margin: "8px 12px 8px 0", cursor: "pointer", color: G.green, fontSize: 12, fontWeight: "bold", flexShrink: 0, fontFamily: "Georgia,serif", alignSelf: "center" }} title="Show QR Code">
-                QR
-              </button>
-            </div>
-          ))
+          : (
+            <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={onPlantsDragEnd}>
+              <SortableContext items={plants.map((p) => String(p.id))} strategy={verticalListSortingStrategy}>
+                {plants.map((p) => (
+                  <SortablePlantRow key={p.id} id={String(p.id)}>
+                    {({ setNodeRef, attributes, listeners, dndStyle }) => (
+                      <div
+                        ref={setNodeRef}
+                        style={{
+                          background: G.white,
+                          borderRadius: 14,
+                          marginBottom: 10,
+                          border: `1px solid ${G.greenPale}`,
+                          boxShadow: "0 1px 6px rgba(0,0,0,0.05)",
+                          overflow: "hidden",
+                          display: "flex",
+                          alignItems: "stretch",
+                          ...dndStyle,
+                        }}
+                      >
+                        <button
+                          type="button"
+                          {...listeners}
+                          {...attributes}
+                          aria-label="Drag to reorder plant"
+                          style={adminDragHandleStyle}
+                        >
+                          ≡
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => openEdit(p)}
+                          style={{ flex: 1, display: "flex", alignItems: "center", cursor: "pointer", background: "none", border: "none", textAlign: "left", padding: 0 }}
+                        >
+                          {p.image
+                            ? <img src={p.image} alt="" style={{ width: 70, height: 70, objectFit: "cover", flexShrink: 0 }} onError={e => e.target.style.display = "none"} />
+                            : <div style={{ width: 70, height: 70, background: G.greenPale, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 26, flexShrink: 0 }}>🌿</div>
+                          }
+                          <div style={{ padding: "10px 12px" }}>
+                            <div style={{ fontSize: 15, fontWeight: "bold", color: G.green, fontFamily: "Georgia,serif" }}>{p.name}</div>
+                            {p.malay && <div style={{ fontSize: 11, color: G.brownLight, fontStyle: "italic" }}>{p.malay}</div>}
+                          </div>
+                        </button>
+                        <button type="button" onClick={() => setShowQR(p)} style={{ background: G.white, border: `2px solid ${G.green}`, borderRadius: 10, padding: "6px 12px", margin: "8px 12px 8px 0", cursor: "pointer", color: G.green, fontSize: 12, fontWeight: "bold", flexShrink: 0, fontFamily: "Georgia,serif", alignSelf: "center" }} title="Show QR Code">
+                          QR
+                        </button>
+                      </div>
+                    )}
+                  </SortablePlantRow>
+                ))}
+              </SortableContext>
+            </DndContext>
+          )
         }
         <ActionBtn label="+ Add New Plant" color={G.green} onClick={openAdd} />
       </div>
@@ -1030,7 +1196,40 @@ function MenuAdmin({ categories, setCategories, onBack }) {
   const [itemForm, setItemForm] = useState({ name: "", price: "", image: "" });
   const [showPicker, setShowPicker] = useState(false);
 
+  const sensors = useAdminSortableSensors();
+
   const EMOJIS = ["🍽️","🥗","🍜","🥤","🧁","🍱","🥞","🫖","🍛","🥙","🧆","🍰"];
+
+  const onCategoriesDragEnd = (event) => {
+    const { active, over } = event;
+    if (!over || active.id === over.id) return;
+    const oldIndex = categories.findIndex((c) => String(c.id) === String(active.id));
+    const newIndex = categories.findIndex((c) => String(c.id) === String(over.id));
+    if (oldIndex < 0 || newIndex < 0) return;
+    const next = arrayMove(categories, oldIndex, newIndex).map((c, idx) => ({ ...c, sort_order: idx }));
+    setCategories(next);
+    void persistSortOrders(
+      "menu_categories",
+      next.map((c) => c.id),
+    );
+  };
+
+  const onMenuItemsDragEnd = (event) => {
+    const { active, over } = event;
+    if (!editCat || !over || active.id === over.id) return;
+    const cat = categories.find((c) => c.id === editCat.id);
+    if (!cat) return;
+    const items = cat.items;
+    const oldIndex = items.findIndex((i) => String(i.id) === String(active.id));
+    const newIndex = items.findIndex((i) => String(i.id) === String(over.id));
+    if (oldIndex < 0 || newIndex < 0) return;
+    const reordered = arrayMove(items, oldIndex, newIndex).map((it, idx) => ({ ...it, sort_order: idx }));
+    setCategories((cats) => cats.map((c) => (c.id === editCat.id ? { ...c, items: reordered } : c)));
+    void persistSortOrders(
+      "menu_items",
+      reordered.map((it) => it.id),
+    );
+  };
 
   const saveItem = async () => {
     if (!itemForm.name.trim() || !itemForm.price) return;
@@ -1049,7 +1248,7 @@ function MenuAdmin({ categories, setCategories, onBack }) {
       if (error) { alert(error.message); return; }
       setCategories(cats => cats.map(c => {
         if (c.id !== editCat.id) return c;
-        return { ...c, items: [...c.items, { id: data.id, name: data.name, price: Number(data.price), image: data.image ?? "" }] };
+        return { ...c, items: [...c.items, { id: data.id, name: data.name, price: Number(data.price), image: data.image ?? "", sort_order: Number(data.sort_order) || sort_order }] };
       }));
     }
     setView("editCat");
@@ -1074,7 +1273,7 @@ function MenuAdmin({ categories, setCategories, onBack }) {
     const sort_order = categories.length;
     const { data, error } = await supabase.from("menu_categories").insert({ label: catForm.name, emoji: catForm.emoji, sort_order }).select().single();
     if (error) { alert(error.message); return; }
-    setCategories(cats => [...cats, { id: data.id, label: data.label, emoji: data.emoji, items: [] }]);
+    setCategories((cats) => [...cats, { id: data.id, label: data.label, emoji: data.emoji, sort_order: Number(data.sort_order) || categories.length, items: [] }]);
     setCatForm({ name: "", emoji: "🍽️" });
     setView("list");
   };
@@ -1131,17 +1330,67 @@ function MenuAdmin({ categories, setCategories, onBack }) {
     const cat = categories.find(c => c.id === editCat?.id);
     return (
       <div>
-        <Header title={`${cat?.emoji} ${cat?.label}`} sub="Tap item to edit" onBack={() => setView("list")} />
+        <Header title={`${cat?.emoji} ${cat?.label}`} sub="Hold ≡ to reorder items · Tap to edit" onBack={() => setView("list")} />
         <div style={{ padding: 16 }}>
-          {(cat?.items || []).map(item => (
-            <div key={item.id} style={{ display: "flex", alignItems: "center", background: G.white, borderRadius: 12, padding: "12px 14px", marginBottom: 10, border: `1px solid ${G.greenPale}`, boxShadow: "0 1px 4px rgba(0,0,0,0.05)" }}>
-              <div style={{ flex: 1 }}>
-                <div style={{ fontSize: 15, fontWeight: "bold", color: G.text }}>{item.name}</div>
-                <div style={{ fontSize: 13, color: G.amber, fontFamily: "monospace" }}>RM {item.price.toFixed(2)}</div>
-              </div>
-              <button onClick={() => { setEditItem(item); setItemForm({ name: item.name, price: String(item.price), image: item.image || "" }); setView("itemForm"); }} style={{ background: G.greenPale, border: "none", borderRadius: 8, padding: "6px 14px", color: G.green, cursor: "pointer", fontSize: 13, fontWeight: "bold" }}>Edit</button>
-            </div>
-          ))}
+          <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={onMenuItemsDragEnd}>
+            <SortableContext items={(cat?.items || []).map((i) => String(i.id))} strategy={verticalListSortingStrategy}>
+              {(cat?.items || []).map((item) => (
+                <SortableMenuItemRow key={item.id} id={String(item.id)}>
+                  {({ setNodeRef, attributes, listeners, dndStyle }) => (
+                    <div
+                      ref={setNodeRef}
+                      style={{
+                        display: "flex",
+                        alignItems: "center",
+                        background: G.white,
+                        borderRadius: 12,
+                        marginBottom: 10,
+                        border: `1px solid ${G.greenPale}`,
+                        overflow: "hidden",
+                        ...dndStyle,
+                      }}
+                    >
+                      <button
+                        type="button"
+                        {...listeners}
+                        {...attributes}
+                        aria-label="Drag to reorder item"
+                        style={adminDragHandleStyle}
+                      >
+                        ≡
+                      </button>
+                      <div style={{ flex: 1, padding: "12px 14px" }}>
+                        <div style={{ fontSize: 15, fontWeight: "bold", color: G.text }}>{item.name}</div>
+                        <div style={{ fontSize: 13, color: G.amber, fontFamily: "monospace" }}>RM {item.price.toFixed(2)}</div>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setEditItem(item);
+                          setItemForm({ name: item.name, price: String(item.price), image: item.image || "" });
+                          setView("itemForm");
+                        }}
+                        style={{
+                          background: G.greenPale,
+                          border: "none",
+                          borderRadius: 8,
+                          padding: "6px 14px",
+                          marginRight: 12,
+                          color: G.green,
+                          cursor: "pointer",
+                          fontSize: 13,
+                          fontWeight: "bold",
+                          flexShrink: 0,
+                        }}
+                      >
+                        Edit
+                      </button>
+                    </div>
+                  )}
+                </SortableMenuItemRow>
+              ))}
+            </SortableContext>
+          </DndContext>
           <ActionBtn label="+ Add Item" color={G.green} onClick={() => { setEditItem(null); setItemForm({ name: "", price: "", image: "" }); setView("itemForm"); }} />
           <ActionBtn label="Delete This Category" color={G.red} onClick={delCat} />
         </div>
@@ -1151,17 +1400,72 @@ function MenuAdmin({ categories, setCategories, onBack }) {
 
   return (
     <div>
-      <Header title="☕ Manage Menu" sub="Tap category to edit" onBack={onBack} />
+      <Header title="☕ Manage Menu" sub="Hold ≡ to reorder categories · Tap to edit" onBack={onBack} />
       <div style={{ padding: 16 }}>
-        {categories.map(cat => (
-          <button key={cat.id} onClick={() => { setEditCat(cat); setView("editCat"); }} style={{ width: "100%", background: G.white, borderRadius: 14, padding: "14px 16px", border: `1px solid ${G.greenPale}`, marginBottom: 10, display: "flex", justifyContent: "space-between", alignItems: "center", cursor: "pointer", boxShadow: "0 1px 6px rgba(0,0,0,0.05)", textAlign: "left" }}>
-            <div>
-              <div style={{ fontSize: 16, fontWeight: "bold", color: G.text, fontFamily: "Georgia,serif" }}>{cat.emoji} {cat.label}</div>
-              <div style={{ fontSize: 12, color: G.textLight }}>{cat.items.length} item{cat.items.length !== 1 ? "s" : ""}</div>
-            </div>
-            <span style={{ fontSize: 22, color: G.greenLight }}>›</span>
-          </button>
-        ))}
+        <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={onCategoriesDragEnd}>
+          <SortableContext items={categories.map((c) => String(c.id))} strategy={verticalListSortingStrategy}>
+            {categories.map((cat) => (
+              <SortableCategoryRow key={cat.id} id={String(cat.id)}>
+                {({ setNodeRef, attributes, listeners, dndStyle }) => (
+                  <div
+                    ref={setNodeRef}
+                    style={{
+                      width: "100%",
+                      marginBottom: 10,
+                      display: "flex",
+                      alignItems: "stretch",
+                      background: G.white,
+                      borderRadius: 14,
+                      border: `1px solid ${G.greenPale}`,
+                      overflow: "hidden",
+                      boxSizing: "border-box",
+                      ...dndStyle,
+                    }}
+                  >
+                    <button
+                      type="button"
+                      {...listeners}
+                      {...attributes}
+                      aria-label="Drag to reorder category"
+                      style={adminDragHandleStyle}
+                    >
+                      ≡
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setEditCat(cat);
+                        setView("editCat");
+                      }}
+                      style={{
+                        flex: 1,
+                        display: "flex",
+                        justifyContent: "space-between",
+                        alignItems: "center",
+                        cursor: "pointer",
+                        background: G.white,
+                        border: "none",
+                        padding: "14px 16px",
+                        textAlign: "left",
+                        fontFamily: "Georgia,serif",
+                      }}
+                    >
+                      <div>
+                        <div style={{ fontSize: 16, fontWeight: "bold", color: G.text, fontFamily: "Georgia,serif" }}>
+                          {cat.emoji} {cat.label}
+                        </div>
+                        <div style={{ fontSize: 12, color: G.textLight }}>
+                          {cat.items.length} item{cat.items.length !== 1 ? "s" : ""}
+                        </div>
+                      </div>
+                      <span style={{ fontSize: 22, color: G.greenLight }}>›</span>
+                    </button>
+                  </div>
+                )}
+              </SortableCategoryRow>
+            ))}
+          </SortableContext>
+        </DndContext>
         <ActionBtn label="+ Add New Category" color={G.amber} onClick={() => setView("addCat")} />
       </div>
     </div>
@@ -1401,7 +1705,7 @@ export default function App() {
     let cancelled = false;
     (async () => {
       try {
-        const plantsQ = supabase.from("plants").select("*").order("id", { ascending: true });
+        const plantsQ = supabase.from("plants").select("*").order("sort_order", { ascending: true }).order("id", { ascending: true });
         const catsQ = supabase.from("menu_categories").select("*").order("sort_order", { ascending: true });
         const itemsQ = supabase.from("menu_items").select("*").order("sort_order", { ascending: true });
         const logoQ = supabase.from("app_settings").select("value").eq("key", "logo").maybeSingle();
