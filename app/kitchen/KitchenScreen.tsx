@@ -107,38 +107,47 @@ function getWebAudioContextConstructor(): (typeof AudioContext) | null {
   return w.AudioContext ?? w.webkitAudioContext ?? null;
 }
 
-function buildNewOrderSpeech(order: OrderRow): string {
-  const parts = (order.items ?? []).map((it) => {
-    const n = String(it.name ?? "").trim() || "item";
-    const q = Math.max(1, Math.round(Number(it.qty) || 1));
-    return `Quantity ${q}: ${n}`;
-  });
-  const itemsStr = parts.length ? parts.join(". ") : "no items listed";
-  return `New order! Order number ${order.order_number}. ${itemsStr}`;
+function formatNewOrderAnnouncementText(order: OrderRow): string {
+  const itemsPart = (order.items ?? []).map((i) => `${i.qty} ${i.name}`).join(", ");
+  return `New order! Order number ${order.order_number}. ${itemsPart || "no items"}`;
 }
 
-/** Slightly slower than default for clarity in a busy kitchen. */
-const KITCHEN_SPEECH_RATE = 0.72;
+const ANNOUNCEMENT_SPEECH_RATE = 0.9;
 
-function speakKitchen(text: string, opts?: { rate?: number }) {
-  if (typeof window === "undefined" || !window.speechSynthesis) return;
-  const u = new SpeechSynthesisUtterance(text);
-  u.rate = opts?.rate ?? KITCHEN_SPEECH_RATE;
-  u.pitch = 1;
-  u.volume = 1;
-  window.speechSynthesis.speak(u);
-}
+/** Approximate duration of playNewOrderChime — speech starts after this so it isn’t drowned out. */
+const NEW_ORDER_CHIME_MS_BEFORE_SPEECH = 1750;
 
-function speakKitchenQueue(lines: string[], rate = KITCHEN_SPEECH_RATE) {
+function prepareSpeechSynthesis() {
   if (typeof window === "undefined" || !window.speechSynthesis) return;
-  window.speechSynthesis.cancel();
-  for (const line of lines) {
-    const u = new SpeechSynthesisUtterance(line);
-    u.rate = rate;
-    u.pitch = 1;
-    u.volume = 1;
-    window.speechSynthesis.speak(u);
+  try {
+    window.speechSynthesis.cancel();
+    window.speechSynthesis.resume();
+  } catch (e) {
+    console.error(e);
   }
+}
+
+/** Queue one or more utterances (same pattern as a single new-order line). */
+function speakQueuedKitchenUtterances(texts: string[]) {
+  if (typeof window === "undefined" || !window.speechSynthesis) return;
+  prepareSpeechSynthesis();
+  for (const text of texts) {
+    const utterance = new SpeechSynthesisUtterance(text);
+    utterance.rate = ANNOUNCEMENT_SPEECH_RATE;
+    utterance.pitch = 1;
+    utterance.volume = 1;
+    window.speechSynthesis.speak(utterance);
+  }
+}
+
+function speakOrderReadyAnnouncement(orderNumber: number) {
+  if (typeof window === "undefined" || !window.speechSynthesis) return;
+  prepareSpeechSynthesis();
+  const utterance = new SpeechSynthesisUtterance(`Order number ${orderNumber} is ready!`);
+  utterance.rate = ANNOUNCEMENT_SPEECH_RATE;
+  utterance.pitch = 1;
+  utterance.volume = 1;
+  window.speechSynthesis.speak(utterance);
 }
 
 /** Stronger attention pattern: alert beeps + longer ascending fanfare. */
@@ -509,6 +518,13 @@ export function KitchenScreen() {
     }
     setAudioUnlocked(true);
     audioUnlockedRef.current = true;
+    if (typeof window !== "undefined" && window.speechSynthesis) {
+      try {
+        window.speechSynthesis.resume();
+      } catch {
+        /* ignore */
+      }
+    }
   }, [ensureAudioRunning]);
 
   useEffect(() => {
@@ -571,17 +587,17 @@ export function KitchenScreen() {
     if (listView === "pending") {
       const newIds = new Set(rows.map((r) => r.id));
       const prev = prevPendingIdsRef.current;
-      if (prev !== null && soundOnRef.current && audioUnlockedRef.current) {
+      if (prev !== null) {
         const newlyAdded = rows.filter((r) => !prev.has(r.id));
         if (newlyAdded.length > 0) {
           const sorted = [...newlyAdded].sort(
             (a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime(),
           );
-          const lines = sorted.map(buildNewOrderSpeech);
+          const lines = sorted.map(formatNewOrderAnnouncementText);
           setLastAnnouncementLines(lines);
           if (soundOnRef.current && audioUnlockedRef.current) {
             void ensureAudioRunning().then((running) => {
-              if (!running || !soundOnRef.current) return;
+              if (!running || !soundOnRef.current || !audioUnlockedRef.current) return;
               const ctx = getOrCreateAudioContext();
               if (!ctx) return;
               try {
@@ -589,7 +605,10 @@ export function KitchenScreen() {
               } catch (e) {
                 console.error(e);
               }
-              speakKitchenQueue(lines);
+              window.setTimeout(() => {
+                if (!soundOnRef.current || !audioUnlockedRef.current) return;
+                speakQueuedKitchenUtterances(lines);
+              }, NEW_ORDER_CHIME_MS_BEFORE_SPEECH);
             });
           }
         }
@@ -599,9 +618,9 @@ export function KitchenScreen() {
   }, [listView, completedDateYmd, ensureAudioRunning, getOrCreateAudioContext]);
 
   const repeatLastAnnouncement = useCallback(() => {
-    if (!soundOnRef.current || lastAnnouncementLines.length === 0) return;
+    if (!soundOnRef.current || !audioUnlockedRef.current || lastAnnouncementLines.length === 0) return;
     void ensureAudioRunning().then((running) => {
-      if (!running || !soundOnRef.current) return;
+      if (!running || !soundOnRef.current || !audioUnlockedRef.current) return;
       const ctx = getOrCreateAudioContext();
       if (ctx) {
         try {
@@ -610,7 +629,10 @@ export function KitchenScreen() {
           console.error(e);
         }
       }
-      speakKitchenQueue(lastAnnouncementLines);
+      window.setTimeout(() => {
+        if (!soundOnRef.current || !audioUnlockedRef.current) return;
+        speakQueuedKitchenUtterances(lastAnnouncementLines);
+      }, 320);
     });
   }, [lastAnnouncementLines, ensureAudioRunning, getOrCreateAudioContext]);
 
@@ -636,9 +658,9 @@ export function KitchenScreen() {
       alert(error.message);
       return;
     }
-    if (soundOnRef.current) {
+    if (soundOnRef.current && audioUnlockedRef.current) {
       void ensureAudioRunning().then((running) => {
-        if (!running || !soundOnRef.current) return;
+        if (!running || !soundOnRef.current || !audioUnlockedRef.current) return;
         const ctx = getOrCreateAudioContext();
         if (!ctx) return;
         try {
@@ -646,10 +668,7 @@ export function KitchenScreen() {
         } catch (e) {
           console.error(e);
         }
-        if (typeof window !== "undefined" && window.speechSynthesis) {
-          window.speechSynthesis.cancel();
-        }
-        speakKitchen(`Order number ${orderNum} is ready!`, { rate: KITCHEN_SPEECH_RATE });
+        speakOrderReadyAnnouncement(orderNum);
       });
     }
     await load();
@@ -800,7 +819,7 @@ export function KitchenScreen() {
               type="button"
               title="Repeat last order announcement"
               aria-label="Repeat last order announcement"
-              disabled={!soundOn || lastAnnouncementLines.length === 0}
+              disabled={!soundOn || !audioUnlocked || lastAnnouncementLines.length === 0}
               onClick={() => repeatLastAnnouncement()}
               style={{
                 width: 64,
@@ -808,16 +827,16 @@ export function KitchenScreen() {
                 borderRadius: "50%",
                 border: `3px solid ${PAGE.white}`,
                 background:
-                  soundOn && lastAnnouncementLines.length > 0 ? "rgba(255,255,255,0.18)" : "#333",
+                  soundOn && audioUnlocked && lastAnnouncementLines.length > 0 ? "rgba(255,255,255,0.18)" : "#333",
                 fontSize: 28,
                 cursor:
-                  soundOn && lastAnnouncementLines.length > 0 ? "pointer" : "not-allowed",
+                  soundOn && audioUnlocked && lastAnnouncementLines.length > 0 ? "pointer" : "not-allowed",
                 display: "flex",
                 alignItems: "center",
                 justifyContent: "center",
                 lineHeight: 1,
                 boxShadow: "0 4px 12px rgba(0,0,0,0.25)",
-                opacity: soundOn && lastAnnouncementLines.length > 0 ? 1 : 0.45,
+                opacity: soundOn && audioUnlocked && lastAnnouncementLines.length > 0 ? 1 : 0.45,
               }}
             >
               🔁
