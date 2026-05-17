@@ -535,11 +535,12 @@ function QRModal({ plant, onClose }) {
   return (
     <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.65)", zIndex: 100, display: "flex", alignItems: "center", justifyContent: "center", padding: 24 }}>
       <div style={{ background: G.white, borderRadius: 24, padding: 28, textAlign: "center", width: "100%", maxWidth: 340 }}>
-        <div style={{ fontSize: 18, fontWeight: "bold", color: G.green, marginBottom: 2, fontFamily: "Georgia,serif" }}>{plant.name}</div>
-        {plant.malay && <div style={{ fontSize: 13, color: G.brownLight, fontStyle: "italic", marginBottom: 16 }}>{plant.malay}</div>}
         {qrDataUrl
-          ? <img src={qrDataUrl} alt="QR Code" style={{ width: 200, height: 200, border: `4px solid ${G.greenPale}`, borderRadius: 16, marginBottom: 12, objectFit: "contain" }} />
-          : <div style={{ width: 200, height: 200, margin: "0 auto", marginBottom: 12, display: "flex", alignItems: "center", justifyContent: "center", border: `4px solid ${G.greenPale}`, borderRadius: 16, background: G.greenPale, color: G.green, fontSize: 14, fontStyle: "italic" }}>Loading QR…</div>}
+          ? <img src={qrDataUrl} alt="QR Code" style={{ width: 200, height: 200, border: `4px solid ${G.greenPale}`, borderRadius: 16, marginBottom: 16, objectFit: "contain" }} />
+          : <div style={{ width: 200, height: 200, margin: "0 auto", marginBottom: 16, display: "flex", alignItems: "center", justifyContent: "center", border: `4px solid ${G.greenPale}`, borderRadius: 16, background: G.greenPale, color: G.green, fontSize: 14, fontStyle: "italic" }}>Loading QR…</div>}
+        <div style={{ fontSize: 22, fontWeight: "bold", color: G.green, fontFamily: "Georgia,serif", lineHeight: 1.2, marginBottom: plant.malay ? 6 : 8, WebkitPrintColorAdjust: "exact", printColorAdjust: "exact" }}>{plant.name}</div>
+        {plant.malay ? <div style={{ fontSize: 15, color: G.brownLight, fontStyle: "italic", fontFamily: "Georgia,serif", lineHeight: 1.35, marginBottom: 10, WebkitPrintColorAdjust: "exact", printColorAdjust: "exact" }}>{plant.malay}</div> : null}
+        <div style={{ fontSize: 12, color: G.textLight, fontStyle: "italic", marginBottom: 14, fontFamily: "Georgia,serif" }}>Scan to learn more 🌿</div>
         <div style={{ fontSize: 11, color: G.textLight, marginBottom: 6, wordBreak: "break-all" }}>{url}</div>
         <div style={{ fontSize: 12, color: G.green, fontStyle: "italic", marginBottom: 20 }}>📸 Screenshot this to print the QR sticker</div>
         <ActionBtn label="Close" outline onClick={onClose} />
