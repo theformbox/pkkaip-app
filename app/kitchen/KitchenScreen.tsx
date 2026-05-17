@@ -100,15 +100,6 @@ export function formatTime(iso: string) {
   }
 }
 
-function readAudioUnlockedFromStorage(): boolean {
-  if (typeof window === "undefined") return false;
-  try {
-    return localStorage.getItem("kitchen-audio-unlocked") === "1";
-  } catch {
-    return false;
-  }
-}
-
 function getWebAudioContextConstructor(): (typeof AudioContext) | null {
   if (typeof window === "undefined") return null;
   const w = window as unknown as {
@@ -518,10 +509,11 @@ function EditOrderModal({
 }
 
 export function KitchenScreen() {
-  const initialUnlocked = readAudioUnlockedFromStorage();
+  const [mounted, setMounted] = useState(false);
   const [pendingOrders, setPendingOrders] = useState<OrderRow[]>([]);
   const [completedOrders, setCompletedOrders] = useState<OrderRow[]>([]);
-  const [clock, setClock] = useState(() => new Date());
+  /** SSR-safe initial time; updated on mount via useEffect. */
+  const [clock, setClock] = useState(() => new Date(0));
   const [busyId, setBusyId] = useState<string | null>(null);
   const [editingOrder, setEditingOrder] = useState<OrderRow | null>(null);
   const [editDraft, setEditDraft] = useState<OrderItem[]>([]);
@@ -529,12 +521,14 @@ export function KitchenScreen() {
   const [menuCatalog, setMenuCatalog] = useState<MenuCatalogItem[]>([]);
   const [menuCatalogReady, setMenuCatalogReady] = useState(false);
   const [listView, setListView] = useState<KitchenView>("pending");
-  const [completedDateYmd, setCompletedDateYmd] = useState(todayYmdLocal);
+  /** Placeholder until mount — avoids server/client local calendar mismatch. */
+  const [completedDateYmd, setCompletedDateYmd] = useState("2000-01-01");
   const [ordersLoading, setOrdersLoading] = useState(true);
   const [soundOn, setSoundOn] = useState(true);
-  const [audioUnlocked, setAudioUnlocked] = useState(initialUnlocked);
+  /** Always false on first paint; hydrated from localStorage after mount. */
+  const [audioUnlocked, setAudioUnlocked] = useState(false);
   const soundOnRef = useRef(true);
-  const audioUnlockedRef = useRef(initialUnlocked);
+  const audioUnlockedRef = useRef(false);
   /** Previous pending order IDs from last successful poll — for new-order sound only. */
   const prevPendingIdsRef = useRef<Set<string> | null>(null);
   /** Just-marked-ready IDs — ignore as "new" if a poll still returns them briefly. */
@@ -609,16 +603,25 @@ export function KitchenScreen() {
   }, [ensureAudioRunning]);
 
   useEffect(() => {
-    audioUnlockedRef.current = audioUnlocked;
-  }, [audioUnlocked]);
-
-  useEffect(() => {
+    setMounted(true);
+    setClock(new Date());
+    setCompletedDateYmd(todayYmdLocal());
     try {
+      if (localStorage.getItem("kitchen-audio-unlocked") === "1") {
+        audioUnlockedRef.current = true;
+        setAudioUnlocked(true);
+      }
       if (localStorage.getItem("kitchen-sound-muted") === "1") setSoundOn(false);
     } catch {
       /* private mode */
     }
   }, []);
+
+  useEffect(() => {
+    if (!mounted) return;
+    const t = setInterval(() => setClock(new Date()), 1000);
+    return () => clearInterval(t);
+  }, [mounted]);
 
   useEffect(() => {
     let cancelled = false;
@@ -764,16 +767,36 @@ export function KitchenScreen() {
     [listView, completedDateYmd, ensureAudioRunning, getOrCreateAudioContext],
   );
 
-  useEffect(() => {
-    void load(true);
-    const poll = setInterval(() => void load(false), 5000);
-    return () => clearInterval(poll);
-  }, [load]);
+  const loadRef = useRef(load);
+  loadRef.current = load;
 
   useEffect(() => {
-    const t = setInterval(() => setClock(new Date()), 1000);
-    return () => clearInterval(t);
-  }, []);
+    if (!mounted) return;
+    void load(true);
+    const poll = window.setInterval(() => void load(false), 60_000);
+    return () => clearInterval(poll);
+  }, [load, mounted]);
+
+  useEffect(() => {
+    if (!mounted) return;
+    const channel = supabase
+      .channel("kitchen-orders")
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "orders" },
+        (payload) => {
+          console.log("[kitchen] orders realtime:", payload.eventType);
+          void loadRef.current(false);
+        },
+      )
+      .subscribe((status, err) => {
+        if (err) console.error("[kitchen] realtime subscribe error:", err);
+        else console.log("[kitchen] realtime status:", status);
+      });
+    return () => {
+      void supabase.removeChannel(channel);
+    };
+  }, [mounted]);
 
   const markReady = async (id: string) => {
     const row = pendingOrders.find((o) => o.id === id);
@@ -987,7 +1010,7 @@ export function KitchenScreen() {
           menuCatalogReady={menuCatalogReady}
         />
       )}
-      {!audioUnlocked && (
+      {mounted && !audioUnlocked && (
         <button
           type="button"
           onClick={() => void unlockKitchenAudio()}
@@ -1078,11 +1101,13 @@ export function KitchenScreen() {
                 color: PAGE.white,
               }}
             >
-              {clock.toLocaleTimeString(undefined, {
-                hour: "2-digit",
-                minute: "2-digit",
-                second: "2-digit",
-              })}
+              {mounted
+                ? clock.toLocaleTimeString(undefined, {
+                    hour: "2-digit",
+                    minute: "2-digit",
+                    second: "2-digit",
+                  })
+                : "—"}
             </div>
           </div>
         </div>
@@ -1199,7 +1224,7 @@ export function KitchenScreen() {
             textAlign: "center",
           }}
         >
-          Orders for {formatOrdersHeadingDate(completedDateYmd)}
+          Orders for {mounted ? formatOrdersHeadingDate(completedDateYmd) : "…"}
         </div>
       )}
 

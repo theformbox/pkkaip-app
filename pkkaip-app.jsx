@@ -2499,6 +2499,7 @@ function OrdersAdmin({ onBack }) {
   const [dateYmd, setDateYmd] = useState(() => ordersAdminTodayYmd());
   const [showSummary, setShowSummary] = useState(false);
 
+  /** Loads only while Orders History is open (this component mounted). No polling — date change or Refresh triggers fetch. */
   const load = useCallback(async () => {
     setLoading(true);
     const { startIso, endExclusiveIso } = ordersAdminLocalDayBoundsIso(dateYmd);
