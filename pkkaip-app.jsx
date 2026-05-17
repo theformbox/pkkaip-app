@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from "react";
+import { supabase } from "@/lib/supabase";
 
 // ── Palette ────────────────────────────────────────────────────
 const G = {
@@ -14,9 +15,6 @@ const lbl = { display: "block", fontSize: 13, fontWeight: "bold", color: G.text,
 const inp = { width: "100%", fontSize: 16, border: `1.5px solid ${G.greenPale}`, borderRadius: 12, padding: "11px 14px", background: G.white, marginBottom: 16, boxSizing: "border-box", outline: "none", fontFamily: "Georgia,serif", color: G.text };
 
 // ── Helpers ────────────────────────────────────────────────────
-let _id = 2000;
-const uid = () => ++_id;
-
 function getBreakdown(amount) {
   const denoms = [
     { label: "RM 50", value: 50 }, { label: "RM 10", value: 10 },
@@ -36,36 +34,39 @@ function qrUrl(text) {
   return `https://chart.googleapis.com/chart?chs=300x300&cht=qr&chl=${encodeURIComponent(text)}&choe=UTF-8`;
 }
 
-// ── Initial data ───────────────────────────────────────────────
-const INIT_CATS = [
-  {
-    id: "breakfast", label: "Breakfast", emoji: "🍳",
-    items: [
-      { id: 1, name: "Nasi Lemak", price: 5.00 },
-      { id: 2, name: "Siam Meehoon", price: 5.00 },
-      { id: 3, name: "Porridge", price: 4.50 },
-      { id: 4, name: "Bagel", price: 5.00 },
-      { id: 5, name: "Toasted Bread", price: 4.50 },
-      { id: 6, name: "Half Boiled Egg", price: 3.00 },
-      { id: 7, name: "Karipap", price: 0.90 },
-    ],
-  },
-  {
-    id: "drinks", label: "Drinks", emoji: "☕",
-    items: [
-      { id: 101, name: "Nutrient Drink", price: 6.90 },
-      { id: 102, name: "Kopi", price: 4.50 },
-      { id: 103, name: "Milo", price: 4.50 },
-      { id: 104, name: "Green Tea", price: 3.00 },
-      { id: 105, name: "Tea Bag", price: 3.00 },
-    ],
-  },
-];
+function plantFromRow(row) {
+  return {
+    id: row.id,
+    name: row.name ?? "",
+    malay: row.malay ?? "",
+    description: row.description ?? "",
+    care: row.care ?? "",
+    uses: row.uses ?? "",
+    image: row.image ?? "",
+  };
+}
 
-const INIT_PLANTS = [
-  { id: 1, name: "Pandan", malay: "Pokok Pandan", description: "A tropical plant widely used in Southeast Asian cooking, known for its sweet floral aroma.", care: "Water daily. Grows best in partial shade with moist soil.", uses: "Flavours rice, desserts, and drinks. Also a natural air freshener.", image: `https://images.unsplash.com/photo-1632843516787-22af093990c4?w=400&h=300&fit=crop` },
-  { id: 2, name: "Aloe Vera", malay: "Lidah Buaya", description: "A succulent with thick fleshy leaves filled with a cooling, soothing gel.", care: "Water once every 2–3 weeks. Needs full sun and well-drained soil.", uses: "Gel soothes burns and skin irritation. Used in drinks and cosmetics.", image: `https://images.unsplash.com/photo-1596547609652-9cf5d8d76921?w=400&h=300&fit=crop` },
-];
+function categoriesFromJoin(cats, items) {
+  const map = new Map();
+  for (const c of cats) {
+    map.set(c.id, { id: c.id, label: c.label, emoji: c.emoji ?? "🍽️", items: [] });
+  }
+  for (const it of items) {
+    const bucket = map.get(it.category_id);
+    if (bucket) bucket.items.push({ id: it.id, name: it.name, price: Number(it.price) });
+  }
+  return Array.from(map.values());
+}
+
+function LoadingScreen() {
+  return (
+    <div style={{ fontFamily: "Georgia,serif", background: G.cream, minHeight: "100vh", maxWidth: 430, margin: "0 auto", display: "flex", alignItems: "center", justifyContent: "center", flexDirection: "column", gap: 16 }}>
+      <style>{"@keyframes pkkaip-spin { to { transform: rotate(360deg); } }"}</style>
+      <div style={{ width: 40, height: 40, border: `4px solid ${G.greenPale}`, borderTopColor: G.green, borderRadius: "50%", animation: "pkkaip-spin 0.8s linear infinite" }} />
+      <div style={{ color: G.textLight, fontSize: 14, fontStyle: "italic" }}>Loading…</div>
+    </div>
+  );
+}
 
 // ══════════════════════════════════════════════════════════════
 // SHARED COMPONENTS
@@ -449,14 +450,26 @@ function PlantAdmin({ plants, setPlants, onBack }) {
   const openAdd = () => { setEditPlant(null); setForm({ name: "", malay: "", description: "", care: "", uses: "", image: "" }); setView("form"); };
   const openEdit = p => { setEditPlant(p); setForm({ name: p.name, malay: p.malay || "", description: p.description || "", care: p.care || "", uses: p.uses || "", image: p.image || "" }); setView("form"); };
 
-  const save = () => {
+  const save = async () => {
     if (!form.name.trim()) return;
-    if (editPlant) setPlants(ps => ps.map(p => p.id === editPlant.id ? { ...p, ...form } : p));
-    else setPlants(ps => [...ps, { id: uid(), ...form }]);
+    if (editPlant) {
+      const { error } = await supabase.from("plants").update({ ...form }).eq("id", editPlant.id);
+      if (error) { alert(error.message); return; }
+      setPlants(ps => ps.map(p => p.id === editPlant.id ? { ...p, ...form } : p));
+    } else {
+      const { data, error } = await supabase.from("plants").insert({ ...form }).select().single();
+      if (error) { alert(error.message); return; }
+      setPlants(ps => [...ps, plantFromRow(data)]);
+    }
     setView("list");
   };
 
-  const del = () => { setPlants(ps => ps.filter(p => p.id !== editPlant.id)); setView("list"); };
+  const del = async () => {
+    const { error } = await supabase.from("plants").delete().eq("id", editPlant.id);
+    if (error) { alert(error.message); return; }
+    setPlants(ps => ps.filter(p => p.id !== editPlant.id));
+    setView("list");
+  };
 
   if (view === "form") return (
     <div>
@@ -546,23 +559,48 @@ function MenuAdmin({ categories, setCategories, onBack }) {
 
   const EMOJIS = ["🍽️","🥗","🍜","🥤","🧁","🍱","🥞","🫖","🍛","🥙","🧆","🍰"];
 
-  const saveItem = () => {
+  const saveItem = async () => {
     if (!itemForm.name.trim() || !itemForm.price) return;
-    setCategories(cats => cats.map(c => {
-      if (c.id !== editCat.id) return c;
-      if (editItem) return { ...c, items: c.items.map(i => i.id === editItem.id ? { ...i, name: itemForm.name, price: parseFloat(itemForm.price) } : i) };
-      return { ...c, items: [...c.items, { id: uid(), name: itemForm.name, price: parseFloat(itemForm.price) }] };
-    }));
+    const price = parseFloat(itemForm.price);
+    if (editItem) {
+      const { error } = await supabase.from("menu_items").update({ name: itemForm.name, price }).eq("id", editItem.id);
+      if (error) { alert(error.message); return; }
+      setCategories(cats => cats.map(c => {
+        if (c.id !== editCat.id) return c;
+        return { ...c, items: c.items.map(i => i.id === editItem.id ? { ...i, name: itemForm.name, price } : i) };
+      }));
+    } else {
+      const sort_order = (categories.find(c => c.id === editCat.id)?.items.length) ?? 0;
+      const { data, error } = await supabase.from("menu_items").insert({ category_id: editCat.id, name: itemForm.name, price, sort_order }).select().single();
+      if (error) { alert(error.message); return; }
+      setCategories(cats => cats.map(c => {
+        if (c.id !== editCat.id) return c;
+        return { ...c, items: [...c.items, { id: data.id, name: data.name, price: Number(data.price) }] };
+      }));
+    }
     setView("editCat");
   };
 
-  const delItem = (catId, itemId) => setCategories(cats => cats.map(c => c.id !== catId ? c : { ...c, items: c.items.filter(i => i.id !== itemId) }));
-  const delCat = () => { setCategories(cats => cats.filter(c => c.id !== editCat.id)); setView("list"); };
+  const delItem = async (catId, itemId) => {
+    const { error } = await supabase.from("menu_items").delete().eq("id", itemId);
+    if (error) { alert(error.message); return; }
+    setCategories(cats => cats.map(c => c.id !== catId ? c : { ...c, items: c.items.filter(i => i.id !== itemId) }));
+  };
+  const delCat = async () => {
+    const { error: e1 } = await supabase.from("menu_items").delete().eq("category_id", editCat.id);
+    if (e1) { alert(e1.message); return; }
+    const { error: e2 } = await supabase.from("menu_categories").delete().eq("id", editCat.id);
+    if (e2) { alert(e2.message); return; }
+    setCategories(cats => cats.filter(c => c.id !== editCat.id));
+    setView("list");
+  };
 
-  const addCat = () => {
+  const addCat = async () => {
     if (!catForm.name.trim()) return;
-    const id = catForm.name.toLowerCase().replace(/\s+/g, "_") + "_" + uid();
-    setCategories(cats => [...cats, { id, label: catForm.name, emoji: catForm.emoji, items: [] }]);
+    const sort_order = categories.length;
+    const { data, error } = await supabase.from("menu_categories").insert({ label: catForm.name, emoji: catForm.emoji, sort_order }).select().single();
+    if (error) { alert(error.message); return; }
+    setCategories(cats => [...cats, { id: data.id, label: data.label, emoji: data.emoji, items: [] }]);
     setCatForm({ name: "", emoji: "🍽️" });
     setView("list");
   };
@@ -594,7 +632,7 @@ function MenuAdmin({ categories, setCategories, onBack }) {
         <label style={lbl}>Price (RM)</label>
         <input style={inp} type="number" inputMode="decimal" value={itemForm.price} onChange={e => setItemForm(f => ({ ...f, price: e.target.value }))} placeholder="e.g. 5.00" />
         <ActionBtn label="Save" color={G.green} onClick={saveItem} />
-        {editItem && <ActionBtn label="Delete Item" color={G.red} onClick={() => { delItem(editCat.id, editItem.id); setView("editCat"); }} />}
+        {editItem && <ActionBtn label="Delete Item" color={G.red} onClick={async () => { await delItem(editCat.id, editItem.id); setView("editCat"); }} />}
         <ActionBtn label="Cancel" outline onClick={() => setView("editCat")} />
       </div>
     </div>
@@ -658,12 +696,18 @@ function LogoAdmin({ logo, setLogo, onBack }) {
     reader.readAsDataURL(file);
   };
 
-  const save = () => {
-    if (preview) setLogo(preview);
+  const save = async () => {
+    if (preview) {
+      const { error } = await supabase.from("app_settings").upsert({ key: "logo", value: preview }, { onConflict: "key" });
+      if (error) { alert(error.message); return; }
+      setLogo(preview);
+    }
     onBack();
   };
 
-  const reset = () => {
+  const reset = async () => {
+    const { error } = await supabase.from("app_settings").delete().eq("key", "logo");
+    if (error) { alert(error.message); return; }
     setLogo(null);
     setPreview(null);
     onBack();
@@ -757,10 +801,37 @@ function AdminScreen({ onBack, categories, setCategories, plants, setPlants, log
 // ══════════════════════════════════════════════════════════════
 
 export default function App() {
+  const [bootLoading, setBootLoading] = useState(true);
   const [screen, setScreen] = useState("home");
-  const [categories, setCategories] = useState(INIT_CATS);
-  const [plants, setPlants] = useState(INIT_PLANTS);
+  const [categories, setCategories] = useState([]);
+  const [plants, setPlants] = useState([]);
   const [logo, setLogo] = useState(null); // null = use built-in logo
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const plantsQ = supabase.from("plants").select("*").order("id", { ascending: true });
+        const catsQ = supabase.from("menu_categories").select("*").order("sort_order", { ascending: true });
+        const itemsQ = supabase.from("menu_items").select("*").order("sort_order", { ascending: true });
+        const logoQ = supabase.from("app_settings").select("value").eq("key", "logo").maybeSingle();
+        const [plantsRes, catsRes, itemsRes, logoRes] = await Promise.all([plantsQ, catsQ, itemsQ, logoQ]);
+        if (cancelled) return;
+        if (plantsRes.error) console.error(plantsRes.error);
+        if (catsRes.error) console.error(catsRes.error);
+        if (itemsRes.error) console.error(itemsRes.error);
+        if (logoRes.error) console.error(logoRes.error);
+        setPlants((plantsRes.data ?? []).map(plantFromRow));
+        setCategories(categoriesFromJoin(catsRes.data ?? [], itemsRes.data ?? []));
+        setLogo(logoRes.data?.value ?? null);
+      } finally {
+        if (!cancelled) setBootLoading(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, []);
+
+  if (bootLoading) return <LoadingScreen />;
 
   // QR scan landing: if URL has ?plant=ID, show that plant
   const params = new URLSearchParams(window.location.search);
