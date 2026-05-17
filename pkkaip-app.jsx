@@ -421,55 +421,79 @@ function CafeScreen({ onBack, categories, setCategories, logo }) {
     categoriesRef.current = categories;
   }, [categories]);
 
-  const tryConsumeStock = async (itemId, amount) => {
+  const stockSyncTimersRef = useRef({});
+
+  useEffect(() => {
+    return () => {
+      Object.values(stockSyncTimersRef.current).forEach(clearTimeout);
+      stockSyncTimersRef.current = {};
+    };
+  }, []);
+
+  const flushStockToSupabase = async (itemId) => {
+    const live = findItemInCategories(categoriesRef.current, itemId);
+    if (!live || menuItemStockUnlimited(live.stock)) return;
+    const targetStock = Math.max(0, Math.floor(Number(live.stock)));
+    const { data, error } = await supabase
+      .from("menu_items")
+      .update({ stock: targetStock })
+      .eq("id", itemId)
+      .select("stock")
+      .maybeSingle();
+
+    if (error || !data) {
+      const { data: row } = await supabase.from("menu_items").select("stock").eq("id", itemId).maybeSingle();
+      if (row && row.stock != null) {
+        const serverStock = Number(row.stock);
+        const nextCats = patchMenuItemStock(categoriesRef.current, itemId, serverStock);
+        categoriesRef.current = nextCats;
+        setCategories(nextCats);
+      }
+      alert("Something went wrong, please try again");
+      return;
+    }
+
+    const serverStock = Number(data.stock);
+    if (serverStock !== targetStock) {
+      const nextCats = patchMenuItemStock(categoriesRef.current, itemId, serverStock);
+      categoriesRef.current = nextCats;
+      setCategories(nextCats);
+    }
+  };
+
+  const scheduleDebouncedStockSync = (itemId) => {
+    const key = String(itemId);
+    const timers = stockSyncTimersRef.current;
+    if (timers[key]) clearTimeout(timers[key]);
+    timers[key] = setTimeout(() => {
+      delete timers[key];
+      void flushStockToSupabase(itemId);
+    }, 600);
+  };
+
+  const optimisticConsumeStock = (itemId, amount) => {
     const live = findItemInCategories(categoriesRef.current, itemId);
     if (!live) return false;
     if (menuItemStockUnlimited(live.stock)) return true;
     const expected = Number(live.stock);
-    if (expected < amount) {
-      alert("Sorry, just sold out!");
-      setCategories((cats) => patchMenuItemStock(cats, itemId, Math.max(0, expected)));
-      return false;
-    }
+    if (expected < amount) return false;
     const newStock = expected - amount;
-    const { data, error } = await supabase
-      .from("menu_items")
-      .update({ stock: newStock })
-      .eq("id", itemId)
-      .eq("stock", expected)
-      .select("stock")
-      .maybeSingle();
-    if (error) {
-      alert(error.message);
-      return false;
-    }
-    if (!data) {
-      alert("Sorry, just sold out!");
-      const { data: row } = await supabase.from("menu_items").select("stock").eq("id", itemId).maybeSingle();
-      if (row && row.stock != null) setCategories((cats) => patchMenuItemStock(cats, itemId, Number(row.stock)));
-      return false;
-    }
-    setCategories((cats) => patchMenuItemStock(cats, itemId, data.stock));
+    const nextCats = patchMenuItemStock(categoriesRef.current, itemId, newStock);
+    categoriesRef.current = nextCats;
+    setCategories(nextCats);
+    scheduleDebouncedStockSync(itemId);
     return true;
   };
 
-  const tryReturnStock = async (itemId, amount) => {
+  const optimisticReturnStock = (itemId, amount) => {
     const live = findItemInCategories(categoriesRef.current, itemId);
     if (!live || menuItemStockUnlimited(live.stock)) return;
     const expected = Number(live.stock);
     const newStock = expected + amount;
-    const { data, error } = await supabase
-      .from("menu_items")
-      .update({ stock: newStock })
-      .eq("id", itemId)
-      .eq("stock", expected)
-      .select("stock")
-      .maybeSingle();
-    if (error) {
-      console.error(error);
-      return;
-    }
-    if (data) setCategories((cats) => patchMenuItemStock(cats, itemId, data.stock));
+    const nextCats = patchMenuItemStock(categoriesRef.current, itemId, newStock);
+    categoriesRef.current = nextCats;
+    setCategories(nextCats);
+    scheduleDebouncedStockSync(itemId);
   };
 
   const total = Object.values(order).reduce((s, { price, qty }) => s + price * qty, 0);
@@ -479,46 +503,41 @@ function CafeScreen({ onBack, categories, setCategories, logo }) {
   const neg = change < -0.001;
   const breakdown = !neg && change > 0.001 ? getBreakdown(change) : [];
 
-  const add = async (item) => {
+  const add = (item) => {
     const live = findItemInCategories(categories, item.id) || item;
     if (menuItemSoldOut(live)) return;
-    const ok = await tryConsumeStock(item.id, 1);
-    if (!ok) return;
+    if (!optimisticConsumeStock(item.id, 1)) return;
     setOrder((p) => {
       const prevQty = p[item.id]?.qty || 0;
-      return { ...p, [item.id]: { ...live, qty: prevQty + 1 } };
+      const curLive = findItemInCategories(categoriesRef.current, item.id) || item;
+      return { ...p, [item.id]: { ...curLive, qty: prevQty + 1 } };
     });
   };
 
   const adj = (id, d) => {
-    void (async () => {
-      const entry = order[id];
-      if (!entry) return;
-      const nextQty = (entry.qty || 0) + d;
-      if (nextQty < 0) return;
-      if (d > 0) {
-        const live = findItemInCategories(categoriesRef.current, id) || entry;
-        if (menuItemSoldOut(live)) {
-          alert("Sorry, just sold out!");
-          return;
-        }
-        const ok = await tryConsumeStock(id, 1);
-        if (!ok) return;
-      } else if (d < 0 && entry.qty > 0) {
-        await tryReturnStock(id, 1);
+    const entry = order[id];
+    if (!entry) return;
+    const nextQty = (entry.qty || 0) + d;
+    if (nextQty < 0) return;
+    if (d > 0) {
+      const live = findItemInCategories(categoriesRef.current, id) || entry;
+      if (!menuItemStockUnlimited(live.stock) && menuItemSoldOut(live)) return;
+      if (!optimisticConsumeStock(id, 1)) return;
+    } else if (d < 0 && entry.qty > 0) {
+      optimisticReturnStock(id, 1);
+    }
+    setOrder((p) => {
+      const cur = p[id];
+      if (!cur) return p;
+      const q = cur.qty + d;
+      if (q <= 0) {
+        const n = { ...p };
+        delete n[id];
+        return n;
       }
-      setOrder((p) => {
-        const cur = p[id];
-        if (!cur) return p;
-        const q = cur.qty + d;
-        if (q <= 0) {
-          const n = { ...p };
-          delete n[id];
-          return n;
-        }
-        return { ...p, [id]: { ...cur, qty: q } };
-      });
-    })();
+      const merged = findItemInCategories(categoriesRef.current, id) || cur;
+      return { ...p, [id]: { ...merged, qty: q } };
+    });
   };
   const reset = () => {
     setOrder({});
@@ -531,7 +550,13 @@ function CafeScreen({ onBack, categories, setCategories, logo }) {
     setDoneLines([]);
     setSavingOrder(false);
     setCustomerName("");
-    setShowWelcome(false);
+    setShowWelcome(true);
+    setCustomerDraft("");
+    try {
+      setStaffDraft(localStorage.getItem(PKKAIP_STAFF_NAME_KEY) || "");
+    } catch {
+      setStaffDraft("");
+    }
   };
 
   const clearMenuCartState = () => {
@@ -544,17 +569,13 @@ function CafeScreen({ onBack, categories, setCategories, logo }) {
 
   /** Clear in-progress cart and put reserved units back for limited-stock items. */
   const clearCartWithStockRestore = () => {
-    void (async () => {
-      const snapshot = { ...order };
-      for (const line of Object.values(snapshot)) {
-        const q = line.qty || 0;
-        if (q <= 0 || menuItemStockUnlimited(line.stock)) continue;
-        for (let i = 0; i < q; i++) {
-          await tryReturnStock(line.id, 1);
-        }
-      }
-      clearMenuCartState();
-    })();
+    const snapshot = { ...order };
+    for (const line of Object.values(snapshot)) {
+      const q = line.qty || 0;
+      if (q <= 0 || menuItemStockUnlimited(line.stock)) continue;
+      optimisticReturnStock(line.id, q);
+    }
+    clearMenuCartState();
   };
 
   const commitWelcome = () => {
@@ -567,38 +588,84 @@ function CafeScreen({ onBack, categories, setCategories, logo }) {
 
   const cat = categories[tab] || categories[0];
 
-  const welcomeInp = {
-    width: "100%",
-    fontSize: 18,
-    height: 50,
-    boxSizing: "border-box",
-    border: `1.5px solid ${G.greenPale}`,
-    borderRadius: 12,
-    padding: "0 14px",
-    background: G.white,
-    fontFamily: "Georgia,serif",
-    color: G.text,
-    outline: "none",
-  };
-
   if (showWelcome) {
+    const customerWelcomeInp = {
+      width: "100%",
+      fontSize: 22,
+      minHeight: 56,
+      boxSizing: "border-box",
+      border: `2px solid ${G.green}`,
+      borderRadius: 14,
+      padding: "0 16px",
+      background: G.white,
+      fontFamily: "Georgia,serif",
+      color: G.text,
+      outline: "none",
+    };
+    const staffWelcomeInp = {
+      width: "100%",
+      fontSize: 16,
+      height: 44,
+      boxSizing: "border-box",
+      border: `1.5px solid ${G.greenPale}`,
+      borderRadius: 12,
+      padding: "0 12px",
+      background: G.white,
+      fontFamily: "Georgia,serif",
+      color: G.text,
+      outline: "none",
+    };
+
     return (
       <div style={{ background: G.cream, minHeight: "100vh" }}>
         <Header title="☕ Café Order" onBack={onBack} />
-        <div style={{ padding: "20px 22px 40px", maxWidth: 430, margin: "0 auto" }}>
-          <div style={{ display: "flex", flexDirection: "column", alignItems: "center", textAlign: "center" }}>
-            <img src={logo || BUILTIN_PKKAIP_LOGO_SRC} alt="PKKAIP" style={{ width: 60, height: 60, objectFit: "contain", marginBottom: 18 }} />
-            <div style={{ fontSize: 28, fontWeight: "bold", color: G.green, fontFamily: "Georgia,serif", marginBottom: 8 }}>Hello! 👋</div>
-            <div style={{ fontSize: 17, color: G.amber, fontStyle: "italic", marginBottom: 28 }}>{"Let's take an order!"}</div>
+        <div style={{ padding: "24px 22px 40px", maxWidth: 430, margin: "0 auto" }}>
+          <div style={{ textAlign: "center", marginBottom: 8 }}>
+            <img src={logo || BUILTIN_PKKAIP_LOGO_SRC} alt="PKKAIP" style={{ width: 48, height: 48, objectFit: "contain", marginBottom: 20 }} />
           </div>
-          <div style={{ marginBottom: 18 }}>
-            <label style={{ ...lbl, fontSize: 15 }}>Customer Name</label>
-            <input style={{ ...welcomeInp, marginBottom: 0 }} value={customerDraft} onChange={(e) => setCustomerDraft(e.target.value)} placeholder="" />
-          </div>
-          <div style={{ marginBottom: 22 }}>
-            <label style={{ ...lbl, fontSize: 15 }}>Order taken by</label>
+
+          <div style={{ marginBottom: 28 }}>
+            <label
+              htmlFor="pkkaip-welcome-customer"
+              style={{
+                display: "block",
+                fontSize: 24,
+                fontWeight: "bold",
+                color: G.green,
+                fontFamily: "Georgia,serif",
+                marginBottom: 14,
+                lineHeight: 1.25,
+              }}
+            >
+              Who is this order for?
+            </label>
             <input
-              style={{ ...welcomeInp, marginBottom: 0 }}
+              id="pkkaip-welcome-customer"
+              autoComplete="name"
+              style={{ ...customerWelcomeInp, marginBottom: 0 }}
+              value={customerDraft}
+              onChange={(e) => setCustomerDraft(e.target.value)}
+              placeholder=""
+            />
+          </div>
+
+          <div style={{ marginBottom: 26 }}>
+            <label
+              htmlFor="pkkaip-welcome-staff"
+              style={{
+                display: "block",
+                fontSize: 14,
+                color: G.textLight,
+                fontFamily: "Georgia,serif",
+                marginBottom: 8,
+                fontWeight: "normal",
+              }}
+            >
+              Order taken by:
+            </label>
+            <input
+              id="pkkaip-welcome-staff"
+              style={{ ...staffWelcomeInp, marginBottom: 0 }}
               value={staffDraft}
               onChange={(e) => {
                 const v = e.target.value;
@@ -612,6 +679,7 @@ function CafeScreen({ onBack, categories, setCategories, logo }) {
               placeholder=""
             />
           </div>
+
           <button
             type="button"
             onClick={commitWelcome}
@@ -833,7 +901,7 @@ function CafeScreen({ onBack, categories, setCategories, logo }) {
               type="button"
               key={item.id}
               disabled={soldOut}
-              onClick={() => { if (!soldOut) void add(item); }}
+              onClick={() => { if (!soldOut) add(item); }}
               style={{
                 background: G.white,
                 borderRadius: 16,

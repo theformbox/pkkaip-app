@@ -11,6 +11,7 @@ type OrderRow = {
   total: number;
   items: { id?: string; name: string; price: number; qty: number; image?: string }[];
   customer_name?: string | null;
+  staff_name?: string | null;
   completed_at?: string | null;
 };
 
@@ -529,6 +530,7 @@ export function KitchenScreen() {
   const [menuCatalogReady, setMenuCatalogReady] = useState(false);
   const [listView, setListView] = useState<KitchenView>("pending");
   const [completedDateYmd, setCompletedDateYmd] = useState(todayYmdLocal);
+  const [ordersLoading, setOrdersLoading] = useState(true);
   const [soundOn, setSoundOn] = useState(true);
   const [audioUnlocked, setAudioUnlocked] = useState(initialUnlocked);
   const soundOnRef = useRef(true);
@@ -652,94 +654,103 @@ export function KitchenScreen() {
     });
   };
 
-  const load = useCallback(async () => {
-    if (isUpdating.current) return;
+  const load = useCallback(
+    async (showLoading = false) => {
+      if (isUpdating.current) return;
+      if (showLoading) setOrdersLoading(true);
+      try {
+        // Read-only fetch: never INSERT/UPDATE/DELETE order rows here (no accidental status changes).
+        let q = supabase
+          .from("orders")
+          .select("id, order_number, created_at, status, total, items, customer_name, staff_name, completed_at");
 
-    // Read-only fetch: never INSERT/UPDATE/DELETE order rows here (no accidental status changes).
-    let q = supabase.from("orders").select("id, order_number, created_at, status, total, items, customer_name, completed_at");
-
-    if (listView === "pending") {
-      q = q
-        .eq("status", "pending")
-        .gte("created_at", startOfTodayIso())
-        .order("created_at", { ascending: true });
-    } else {
-      const { startIso, endExclusiveIso } = localDayBoundsIso(completedDateYmd);
-      q = q
-        .eq("status", "ready")
-        .gte("created_at", startIso)
-        .lt("created_at", endExclusiveIso)
-        .order("completed_at", { ascending: false, nullsFirst: false })
-        .order("created_at", { ascending: false });
-    }
-
-    const { data, error } = await q;
-
-    if (error) {
-      console.error(error);
-      return;
-    }
-    const rows = (data ?? []) as OrderRow[];
-
-    if (listView === "pending") {
-      setPendingOrders(rows);
-
-      const newIds = new Set(rows.filter((r) => r.id).map((r) => String(r.id)));
-      const prev = prevPendingIdsRef.current;
-      if (prev !== null) {
-        const newlyAdded = rows.filter((r) => r.id && !prev.has(String(r.id)));
-        if (newlyAdded.length > 0) {
-          const sorted = [...newlyAdded].sort(
-            (a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime(),
-          );
-
-          if (soundOnRef.current && audioUnlockedRef.current) {
-            void ensureAudioRunning().then((running) => {
-              // Audio + speech only; no Supabase writes.
-              if (!running || !soundOnRef.current || !audioUnlockedRef.current) return;
-              const ctx = getOrCreateAudioContext();
-              if (!ctx) return;
-              try {
-                playNewOrderChime(ctx);
-              } catch (e) {
-                console.error(e);
-              }
-              window.setTimeout(() => {
-                const isMuted = !soundOnRef.current;
-                console.log("Muted:", isMuted);
-                if (isMuted || !audioUnlockedRef.current) return;
-                if (typeof window === "undefined" || !window.speechSynthesis) return;
-                try {
-                  window.speechSynthesis.cancel();
-                  for (const o of sorted) {
-                    const text = `New order! Order number ${o.order_number}. ${(o.items ?? [])
-                      .map((i) => `${i.qty} ${i.name}`)
-                      .join(", ")}`;
-                    console.log("Speaking:", text);
-                    const utterance = new SpeechSynthesisUtterance(text);
-                    utterance.lang = "en-US";
-                    utterance.rate = 0.85;
-                    utterance.pitch = 1.0;
-                    utterance.volume = 1.0;
-                    window.speechSynthesis.speak(utterance);
-                  }
-                } catch (e) {
-                  console.error(e);
-                }
-              }, 500);
-            });
-          }
+        if (listView === "pending") {
+          q = q
+            .eq("status", "pending")
+            .gte("created_at", startOfTodayIso())
+            .order("created_at", { ascending: true });
+        } else {
+          const { startIso, endExclusiveIso } = localDayBoundsIso(completedDateYmd);
+          q = q
+            .eq("status", "ready")
+            .gte("created_at", startIso)
+            .lt("created_at", endExclusiveIso)
+            .order("completed_at", { ascending: false, nullsFirst: false })
+            .order("created_at", { ascending: false });
         }
+
+        const { data, error } = await q;
+
+        if (error) {
+          console.error(error);
+          return;
+        }
+        const rows = (data ?? []) as OrderRow[];
+
+        if (listView === "pending") {
+          setPendingOrders(rows);
+
+          const newIds = new Set(rows.filter((r) => r.id).map((r) => String(r.id)));
+          const prev = prevPendingIdsRef.current;
+          if (prev !== null) {
+            const newlyAdded = rows.filter((r) => r.id && !prev.has(String(r.id)));
+            if (newlyAdded.length > 0) {
+              const sorted = [...newlyAdded].sort(
+                (a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime(),
+              );
+
+              if (soundOnRef.current && audioUnlockedRef.current) {
+                void ensureAudioRunning().then((running) => {
+                  // Audio + speech only; no Supabase writes.
+                  if (!running || !soundOnRef.current || !audioUnlockedRef.current) return;
+                  const ctx = getOrCreateAudioContext();
+                  if (!ctx) return;
+                  try {
+                    playNewOrderChime(ctx);
+                  } catch (e) {
+                    console.error(e);
+                  }
+                  window.setTimeout(() => {
+                    const isMuted = !soundOnRef.current;
+                    console.log("Muted:", isMuted);
+                    if (isMuted || !audioUnlockedRef.current) return;
+                    if (typeof window === "undefined" || !window.speechSynthesis) return;
+                    try {
+                      window.speechSynthesis.cancel();
+                      for (const o of sorted) {
+                        const text = `New order! Order number ${o.order_number}. ${(o.items ?? [])
+                          .map((i) => `${i.qty} ${i.name}`)
+                          .join(", ")}`;
+                        console.log("Speaking:", text);
+                        const utterance = new SpeechSynthesisUtterance(text);
+                        utterance.lang = "en-US";
+                        utterance.rate = 0.85;
+                        utterance.pitch = 1.0;
+                        utterance.volume = 1.0;
+                        window.speechSynthesis.speak(utterance);
+                      }
+                    } catch (e) {
+                      console.error(e);
+                    }
+                  }, 500);
+                });
+              }
+            }
+          }
+          prevPendingIdsRef.current = newIds;
+        } else {
+          setCompletedOrders(rows);
+        }
+      } finally {
+        if (showLoading) setOrdersLoading(false);
       }
-      prevPendingIdsRef.current = newIds;
-    } else {
-      setCompletedOrders(rows);
-    }
-  }, [listView, completedDateYmd, ensureAudioRunning, getOrCreateAudioContext]);
+    },
+    [listView, completedDateYmd, ensureAudioRunning, getOrCreateAudioContext],
+  );
 
   useEffect(() => {
-    load();
-    const poll = setInterval(load, 5000);
+    void load(true);
+    const poll = setInterval(() => void load(false), 5000);
     return () => clearInterval(poll);
   }, [load]);
 
@@ -924,6 +935,13 @@ export function KitchenScreen() {
         position: "relative",
       }}
     >
+      <style>{`
+        @keyframes kitchenOrdersSpin {
+          to {
+            transform: rotate(360deg);
+          }
+        }
+      `}</style>
       {editingOrder && (
         <EditOrderModal
           order={editingOrder}
@@ -1152,7 +1170,42 @@ export function KitchenScreen() {
         </div>
       )}
 
-      {orders.length === 0 ? (
+      {ordersLoading ? (
+        <div
+          style={{
+            textAlign: "center",
+            marginTop: "12vh",
+            padding: "0 16px",
+            display: "flex",
+            flexDirection: "column",
+            alignItems: "center",
+            gap: 28,
+          }}
+        >
+          <div
+            aria-hidden
+            style={{
+              width: 52,
+              height: 52,
+              border: "5px solid rgba(255,255,255,0.28)",
+              borderTopColor: PAGE.white,
+              borderRadius: "50%",
+              animation: "kitchenOrdersSpin 0.8s linear infinite",
+            }}
+          />
+          <div
+            style={{
+              fontSize: 38,
+              fontWeight: 800,
+              color: PAGE.white,
+              lineHeight: 1.3,
+              fontFamily: "Georgia, 'Times New Roman', serif",
+            }}
+          >
+            Loading orders...
+          </div>
+        </div>
+      ) : orders.length === 0 ? (
         <div style={{ textAlign: "center", marginTop: "12vh", padding: "0 16px" }}>
           <div style={{ fontSize: 48, fontWeight: 800, color: PAGE.white, lineHeight: 1.3 }}>
             {listView === "pending" ? "All caught up! 🎉" : "No completed orders for this day."}
@@ -1175,6 +1228,8 @@ export function KitchenScreen() {
         <div style={{ display: "flex", flexDirection: "column", gap: 28 }}>
           {orders.map((o) => {
             const isDone = listView === "completed";
+            const customerTrim = typeof o.customer_name === "string" ? o.customer_name.trim() : "";
+            const staffTrim = typeof o.staff_name === "string" ? o.staff_name.trim() : "";
 
             return (
               <article
@@ -1284,7 +1339,7 @@ export function KitchenScreen() {
                     >
                       {formatTime(o.created_at)}
                     </div>
-                    {typeof o.customer_name === "string" && o.customer_name.trim() ? (
+                    {customerTrim ? (
                       <div
                         style={{
                           fontSize: 20,
@@ -1294,7 +1349,20 @@ export function KitchenScreen() {
                           marginTop: 8,
                         }}
                       >
-                        For: {o.customer_name.trim()}
+                        For: {customerTrim}
+                      </div>
+                    ) : null}
+                    {staffTrim ? (
+                      <div
+                        style={{
+                          fontSize: 14,
+                          fontWeight: 600,
+                          fontFamily: "Georgia, 'Times New Roman', serif",
+                          color: isDone ? "rgba(26,26,26,0.62)" : "rgba(255,255,255,0.88)",
+                          marginTop: customerTrim ? 6 : 8,
+                        }}
+                      >
+                        Taken by: {staffTrim}
                       </div>
                     ) : null}
                   </div>
