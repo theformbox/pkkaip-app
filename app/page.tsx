@@ -1,2 +1,8 @@
 "use client";
-export { default } from "../pkkaip-app";
+import dynamic from "next/dynamic";
+
+const App = dynamic(() => import("../pkkaip-app"), { ssr: false });
+
+export default function Page() {
+  return <App />;
+}
