@@ -12,6 +12,14 @@ type OrderRow = {
   items: { id?: string; name: string; price: number; qty: number; image?: string }[];
 };
 
+type MenuCatalogItem = {
+  id: string;
+  name: string;
+  price: number;
+  image: string;
+  sort_order: number;
+};
+
 /** Pending order cards: one consistent dark green, white text. */
 const PENDING_CARD = {
   bg: "#1e4d1e",
@@ -185,6 +193,8 @@ function EditOrderModal({
   onClose,
   onSave,
   saving,
+  menuCatalog,
+  menuCatalogReady,
 }: {
   order: OrderRow;
   draft: OrderItem[];
@@ -192,7 +202,10 @@ function EditOrderModal({
   onClose: () => void;
   onSave: () => void;
   saving: boolean;
+  menuCatalog: MenuCatalogItem[];
+  menuCatalogReady: boolean;
 }) {
+  const [replacePickerIndex, setReplacePickerIndex] = useState<number | null>(null);
   const draftTotal = sumItemsTotal(draft);
   const ink = PAGE.ink;
   const canSave = draft.some((it) => it.qty > 0);
@@ -209,7 +222,37 @@ function EditOrderModal({
   };
 
   const removeLine = (index: number) => {
-    setDraft((prev) => prev.filter((_, i) => i !== index));
+    setDraft((prev) => prev.filter((_, idx) => idx !== index));
+    setReplacePickerIndex((open) => {
+      if (open === null) return null;
+      if (open === index) return null;
+      if (open > index) return open - 1;
+      return open;
+    });
+  };
+
+  const applyMenuReplacement = (lineIndex: number, m: MenuCatalogItem) => {
+    setDraft((prev) => {
+      const old = prev[lineIndex];
+      if (!old) return prev;
+      const qty = old.qty;
+      const replacement: OrderItem = {
+        id: String(m.id),
+        name: m.name,
+        price: Number(m.price),
+        qty,
+        image: m.image ?? "",
+      };
+      const without = prev.filter((_, i) => i !== lineIndex);
+      const dupIdx = without.findIndex((it) => it.id != null && String(it.id) === String(m.id));
+      if (dupIdx >= 0) {
+        return without.map((it, i) => (i === dupIdx ? { ...it, qty: it.qty + qty } : it));
+      }
+      const next = [...without];
+      next.splice(Math.min(lineIndex, next.length), 0, replacement);
+      return next;
+    });
+    setReplacePickerIndex(null);
   };
 
   return (
@@ -249,7 +292,7 @@ function EditOrderModal({
             ✏️ Order #{order.order_number}
           </h2>
           <p style={{ margin: "12px 0 0", fontSize: 22, fontWeight: 600, lineHeight: 1.35 }}>
-            Change amounts or remove items that ran out. This updates the order for Admin too.
+            Change amounts, swap a line for another menu item, or remove items. This updates the order for Admin too.
           </p>
         </div>
         <div style={{ overflowY: "auto", padding: 20, flex: 1 }}>
@@ -342,6 +385,77 @@ function EditOrderModal({
                 <div style={{ marginTop: 10, fontSize: 20, fontWeight: 600, color: "#555" }}>
                   RM {Number(it.price).toFixed(2)} each
                 </div>
+                <button
+                  type="button"
+                  disabled={saving}
+                  onClick={() => setReplacePickerIndex((open) => (open === i ? null : i))}
+                  style={{
+                    marginTop: 14,
+                    width: "100%",
+                    padding: "14px 18px",
+                    fontSize: 20,
+                    fontWeight: 800,
+                    borderRadius: 16,
+                    border: `3px solid ${PAGE.readyGreen}`,
+                    background: replacePickerIndex === i ? "rgba(40,167,69,0.2)" : PAGE.white,
+                    color: ink,
+                    cursor: saving ? "wait" : "pointer",
+                  }}
+                >
+                  {replacePickerIndex === i ? "▲ Hide menu" : "📋 Replace with another menu item"}
+                </button>
+                {replacePickerIndex === i && (
+                  <div
+                    style={{
+                      marginTop: 12,
+                      maxHeight: 260,
+                      overflowY: "auto",
+                      borderRadius: 16,
+                      border: `2px solid rgba(0,0,0,0.12)`,
+                      background: "rgba(255,255,255,0.9)",
+                    }}
+                  >
+                    {!menuCatalogReady ? (
+                      <div style={{ padding: 20, fontSize: 20, fontWeight: 600, textAlign: "center", color: "#666" }}>
+                        Loading menu…
+                      </div>
+                    ) : menuCatalog.length === 0 ? (
+                      <div style={{ padding: 20, fontSize: 20, fontWeight: 600, textAlign: "center", color: "#666" }}>
+                        No menu items found.
+                      </div>
+                    ) : (
+                      menuCatalog.map((m) => (
+                        <button
+                          key={m.id}
+                          type="button"
+                          disabled={saving}
+                          onClick={() => applyMenuReplacement(i, m)}
+                          style={{
+                            width: "100%",
+                            display: "flex",
+                            alignItems: "center",
+                            justifyContent: "space-between",
+                            gap: 12,
+                            padding: "14px 16px",
+                            fontSize: 20,
+                            fontWeight: 700,
+                            border: "none",
+                            borderBottom: "1px solid rgba(0,0,0,0.08)",
+                            background: PAGE.white,
+                            color: ink,
+                            cursor: saving ? "wait" : "pointer",
+                            textAlign: "left",
+                          }}
+                        >
+                          <span style={{ flex: 1, lineHeight: 1.3 }}>{m.name}</span>
+                          <span style={{ fontFamily: "monospace", fontWeight: 800, flexShrink: 0 }}>
+                            RM {Number(m.price).toFixed(2)}
+                          </span>
+                        </button>
+                      ))
+                    )}
+                  </div>
+                )}
               </div>
             ))
           )}
@@ -409,6 +523,8 @@ export function KitchenScreen() {
   const [editingOrder, setEditingOrder] = useState<OrderRow | null>(null);
   const [editDraft, setEditDraft] = useState<OrderItem[]>([]);
   const [editSaving, setEditSaving] = useState(false);
+  const [menuCatalog, setMenuCatalog] = useState<MenuCatalogItem[]>([]);
+  const [menuCatalogReady, setMenuCatalogReady] = useState(false);
   const [listView, setListView] = useState<KitchenView>("pending");
   const [completedDateYmd, setCompletedDateYmd] = useState(todayYmdLocal);
   const [soundOn, setSoundOn] = useState(true);
@@ -496,6 +612,23 @@ export function KitchenScreen() {
     } catch {
       /* private mode */
     }
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const { data, error } = await supabase
+        .from("menu_items")
+        .select("id, name, price, image, sort_order")
+        .order("sort_order", { ascending: true });
+      if (cancelled) return;
+      if (error) console.error(error);
+      setMenuCatalog((data ?? []) as MenuCatalogItem[]);
+      setMenuCatalogReady(true);
+    })();
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   useEffect(() => {
@@ -788,6 +921,8 @@ export function KitchenScreen() {
           onClose={closeEditOrder}
           onSave={() => void saveEditOrder()}
           saving={editSaving}
+          menuCatalog={menuCatalog}
+          menuCatalogReady={menuCatalogReady}
         />
       )}
       {!audioUnlocked && (
