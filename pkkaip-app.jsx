@@ -593,7 +593,7 @@ function CafeScreen({ onBack, categories, setCategories, logo }) {
           </div>
           <div style={{ marginBottom: 18 }}>
             <label style={{ ...lbl, fontSize: 15 }}>Customer Name</label>
-            <input style={{ ...welcomeInp, marginBottom: 0 }} value={customerDraft} onChange={(e) => setCustomerDraft(e.target.value)} placeholder="e.g. Ahmad" />
+            <input style={{ ...welcomeInp, marginBottom: 0 }} value={customerDraft} onChange={(e) => setCustomerDraft(e.target.value)} placeholder="" />
           </div>
           <div style={{ marginBottom: 22 }}>
             <label style={{ ...lbl, fontSize: 15 }}>Order taken by</label>
@@ -609,7 +609,7 @@ function CafeScreen({ onBack, categories, setCategories, logo }) {
                   /* ignore */
                 }
               }}
-              placeholder="e.g. Sarah"
+              placeholder=""
             />
           </div>
           <button
@@ -2184,14 +2184,18 @@ function buildOrdersDaySummary(rows) {
   return { items, totalOrders, totalRevenue, mostPopular, bestRevenue };
 }
 
-function OrdersDaySummaryModal({ onClose, rows, dateLabel, dateYmd }) {
+function OrdersDaySummaryModal({ onClose, rows, dateLabel, dateYmd, selectedDateIsToday }) {
   const cardRef = useRef(null);
   const [saving, setSaving] = useState(false);
   const summary = useMemo(() => buildOrdersDaySummary(rows), [rows]);
 
+  const now = new Date();
+  const generatedAt =
+    `Generated on ${now.toLocaleDateString("en-MY", { day: "numeric", month: "long", year: "numeric" })}, ${now.toLocaleTimeString("en-MY", { hour: "2-digit", minute: "2-digit" })}`;
+
   const savePng = () => {
     const el = cardRef.current;
-    if (!el) return;
+    if (!el || saving) return;
     setSaving(true);
     window.setTimeout(() => {
       html2canvas(el, {
@@ -2199,14 +2203,29 @@ function OrdersDaySummaryModal({ onClose, rows, dateLabel, dateYmd }) {
         backgroundColor: "#ffffff",
         logging: false,
       })
-        .then((canvas) => {
+        .then(async (canvas) => {
           const dataUrl = canvas.toDataURL("image/png");
-          const a = document.createElement("a");
-          a.href = dataUrl;
-          a.download = `pkkaip-cafe-summary-${dateYmd}.png`;
-          document.body.appendChild(a);
-          a.click();
-          document.body.removeChild(a);
+          const blob = await (await fetch(dataUrl)).blob();
+          const file = new File([blob], `pkkaip-cafe-summary-${dateYmd}.png`, { type: "image/png" });
+          const shareFilesSupported =
+            typeof navigator !== "undefined" &&
+            typeof navigator.share === "function" &&
+            typeof navigator.canShare === "function" &&
+            navigator.canShare({ files: [file] });
+          if (shareFilesSupported) {
+            try {
+              await navigator.share({ files: [file], title: "PKKAIP Daily Summary" });
+            } catch (err) {
+              if (err && err.name !== "AbortError") console.error(err);
+            }
+          } else {
+            const a = document.createElement("a");
+            a.href = dataUrl;
+            a.download = `pkkaip-cafe-summary-${dateYmd}.png`;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+          }
         })
         .catch((err) => console.error(err))
         .finally(() => setSaving(false));
@@ -2250,7 +2269,7 @@ function OrdersDaySummaryModal({ onClose, rows, dateLabel, dateYmd }) {
             boxShadow: "0 3px 10px rgba(0,0,0,0.12)",
           }}
         >
-          {saving ? "…" : "💾 Save Image"}
+          {saving ? "Preparing..." : "📤 Share / Save to Photos"}
         </button>
         <button
           type="button"
@@ -2288,6 +2307,14 @@ function OrdersDaySummaryModal({ onClose, rows, dateLabel, dateYmd }) {
             <img src={BUILTIN_PKKAIP_LOGO_SRC} alt="" style={{ width: 50, height: 50, objectFit: "contain", display: "block", margin: "0 auto 12px" }} />
             <div style={{ fontSize: 26, fontWeight: "bold", color: G.green, fontFamily: "Georgia,serif", marginBottom: 6 }}>PKKAIP Café</div>
             <div style={{ fontSize: 18, color: G.textLight, fontFamily: "Georgia,serif" }}>{dateLabel}</div>
+            <div style={{ fontSize: 14, color: G.textLight, fontStyle: "italic", fontFamily: "Georgia,serif", marginTop: 8, lineHeight: 1.4 }}>
+              {generatedAt}
+            </div>
+            {selectedDateIsToday ? (
+              <div style={{ fontSize: 14, color: G.amber, fontStyle: "italic", fontFamily: "Georgia,serif", marginTop: 8, lineHeight: 1.4 }}>
+                ⚠️ {"Today's summary — orders may still be coming in"}
+              </div>
+            ) : null}
           </div>
 
           <div style={{ height: 2, background: G.greenPale, margin: "20px 0 22px", borderRadius: 1 }} />
@@ -2376,7 +2403,6 @@ function OrdersAdmin({ onBack }) {
   const [loading, setLoading] = useState(true);
   const [dateYmd, setDateYmd] = useState(() => ordersAdminTodayYmd());
   const [showSummary, setShowSummary] = useState(false);
-  const dateInputRef = useRef(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -2395,16 +2421,6 @@ function OrdersAdmin({ onBack }) {
   useEffect(() => {
     void load();
   }, [load]);
-
-  const openDatePicker = () => {
-    const el = dateInputRef.current;
-    if (!el) return;
-    try {
-      el.showPicker();
-    } catch {
-      el.click();
-    }
-  };
 
   const statusStyle = (status) => {
     const s = String(status || "").toLowerCase();
@@ -2446,20 +2462,31 @@ function OrdersAdmin({ onBack }) {
   return (
     <div>
       {showSummary ? (
-        <OrdersDaySummaryModal onClose={() => setShowSummary(false)} rows={rows} dateLabel={dateLabel} dateYmd={dateYmd} />
+        <OrdersDaySummaryModal
+          onClose={() => setShowSummary(false)}
+          rows={rows}
+          dateLabel={dateLabel}
+          dateYmd={dateYmd}
+          selectedDateIsToday={dateYmd === ordersAdminTodayYmd()}
+        />
       ) : null}
       <Header title="📋 Orders History" sub="Browse orders by day" onBack={onBack} />
       <div style={{ padding: 16 }}>
-        <input
-          ref={dateInputRef}
-          id="pkkaip-orders-admin-date"
-          type="date"
-          value={dateYmd}
-          onChange={(e) => setDateYmd(e.target.value)}
-          style={{ position: "fixed", left: -9999, width: 1, height: 1, opacity: 0 }}
-        />
-
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 10, marginBottom: 14, flexWrap: "wrap" }}>
+        <style>
+          {`
+            #pkkaip-orders-admin-date {
+              -webkit-appearance: none;
+              -moz-appearance: textfield;
+              appearance: none;
+              color-scheme: light;
+            }
+            #pkkaip-orders-admin-date::-webkit-calendar-picker-indicator {
+              cursor: pointer;
+              opacity: 0.55;
+            }
+          `}
+        </style>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 10, marginBottom: 12 }}>
           <button
             type="button"
             aria-label="Previous day"
@@ -2468,32 +2495,15 @@ function OrdersAdmin({ onBack }) {
           >
             ←
           </button>
-          <button
-            type="button"
-            onClick={() => setShowSummary(true)}
-            disabled={loading}
-            style={{
-              minHeight: 44,
-              padding: "10px 16px",
-              borderRadius: 12,
-              border: `2px solid ${G.amber}`,
-              background: "#FFF8EE",
-              color: G.amber,
-              fontSize: 15,
-              fontWeight: "bold",
-              cursor: loading ? "wait" : "pointer",
-              fontFamily: "Georgia,serif",
-              flexShrink: 0,
-            }}
-          >
-            📊 Summary
-          </button>
-          <button
-            type="button"
-            onClick={openDatePicker}
+          <input
+            id="pkkaip-orders-admin-date"
+            type="date"
+            value={dateYmd}
+            onChange={(e) => setDateYmd(e.target.value)}
             aria-label={`Choose date, currently ${dateLabel}`}
             style={{
               flex: 1,
+              minWidth: 0,
               maxWidth: 280,
               padding: "12px 16px",
               borderRadius: 14,
@@ -2504,10 +2514,12 @@ function OrdersAdmin({ onBack }) {
               fontWeight: "bold",
               cursor: "pointer",
               fontFamily: "Georgia,serif",
+              boxSizing: "border-box",
+              minHeight: 44,
+              outline: "none",
+              textAlign: "center",
             }}
-          >
-            {dateLabel}
-          </button>
+          />
           <button
             type="button"
             aria-label="Next day"
@@ -2517,6 +2529,28 @@ function OrdersAdmin({ onBack }) {
             →
           </button>
         </div>
+        <button
+          type="button"
+          onClick={() => setShowSummary(true)}
+          disabled={loading}
+          style={{
+            width: "100%",
+            minHeight: 52,
+            marginBottom: 14,
+            padding: "14px 18px",
+            borderRadius: 14,
+            border: `2px solid ${G.amber}`,
+            background: G.amber,
+            color: G.white,
+            fontSize: 16,
+            fontWeight: "bold",
+            cursor: loading ? "wait" : "pointer",
+            fontFamily: "Georgia,serif",
+            boxShadow: "0 3px 12px rgba(0,0,0,0.12)",
+          }}
+        >
+          📊 See Daily Summary
+        </button>
 
         <div
           style={{
