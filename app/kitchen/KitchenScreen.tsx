@@ -537,6 +537,8 @@ export function KitchenScreen() {
   const audioUnlockedRef = useRef(initialUnlocked);
   /** Previous pending order IDs from last successful poll — for new-order sound only. */
   const prevPendingIdsRef = useRef<Set<string> | null>(null);
+  /** Just-marked-ready IDs — ignore as "new" if a poll still returns them briefly. */
+  const recentlyCompletedIds = useRef<Set<string>>(new Set());
   const audioContextRef = useRef<AudioContext | null>(null);
   /** True while any Supabase write is in flight; polls skip to avoid clobbering optimistic UI. */
   const isUpdating = useRef(false);
@@ -656,7 +658,6 @@ export function KitchenScreen() {
 
   const load = useCallback(
     async (showLoading = false) => {
-      if (isUpdating.current) return;
       if (showLoading) setOrdersLoading(true);
       try {
         // Read-only fetch: never INSERT/UPDATE/DELETE order rows here (no accidental status changes).
@@ -690,12 +691,25 @@ export function KitchenScreen() {
         const rows = (data ?? []) as OrderRow[];
 
         if (listView === "pending") {
-          setPendingOrders(rows);
+          if (isUpdating.current) return;
 
-          const newIds = new Set(rows.filter((r) => r.id).map((r) => String(r.id)));
+          setPendingOrders(
+            rows.filter((r) => !r.id || !recentlyCompletedIds.current.has(String(r.id))),
+          );
+
+          const newIds = new Set(
+            rows
+              .filter((r) => r.id && !recentlyCompletedIds.current.has(String(r.id)))
+              .map((r) => String(r.id)),
+          );
           const prev = prevPendingIdsRef.current;
           if (prev !== null) {
-            const newlyAdded = rows.filter((r) => r.id && !prev.has(String(r.id)));
+            const newlyAdded = rows.filter(
+              (r) =>
+                r.id &&
+                !recentlyCompletedIds.current.has(String(r.id)) &&
+                !prev.has(String(r.id)),
+            );
             if (newlyAdded.length > 0) {
               const sorted = [...newlyAdded].sort(
                 (a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime(),
@@ -765,6 +779,12 @@ export function KitchenScreen() {
     const row = pendingOrders.find((o) => o.id === id);
     if (!row) return;
 
+    const idStr = String(id);
+    recentlyCompletedIds.current.add(idStr);
+    window.setTimeout(() => {
+      recentlyCompletedIds.current.delete(idStr);
+    }, 30_000);
+
     isUpdating.current = true;
 
     if (soundOnRef.current && audioUnlockedRef.current && typeof window !== "undefined" && window.speechSynthesis) {
@@ -776,6 +796,13 @@ export function KitchenScreen() {
     }
 
     setBusyId(id);
+
+    setPendingOrders((prev) => {
+      const next = prev.filter((o) => o.id !== id);
+      prevPendingIdsRef.current = new Set(next.filter((o) => o.id).map((o) => String(o.id)));
+      return next;
+    });
+
     const completedAt = new Date().toISOString();
     const { error } = await supabase
       .from("orders")
@@ -786,17 +813,19 @@ export function KitchenScreen() {
     if (error) {
       console.error(error);
       alert(error.message);
+      recentlyCompletedIds.current.delete(idStr);
+      setPendingOrders((prev) => {
+        const next = [...prev, row].sort(
+          (a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime(),
+        );
+        prevPendingIdsRef.current = new Set(next.filter((o) => o.id).map((o) => String(o.id)));
+        return next;
+      });
       isUpdating.current = false;
       return;
     }
 
     const readyRow: OrderRow = { ...row, status: "ready", completed_at: completedAt };
-
-    setPendingOrders((prev) => {
-      const next = prev.filter((o) => o.id !== id);
-      prevPendingIdsRef.current = new Set(next.filter((o) => o.id).map((o) => String(o.id)));
-      return next;
-    });
 
     setCompletedOrders((prev) => [readyRow, ...prev.filter((o) => o.id !== id)]);
 
@@ -843,6 +872,8 @@ export function KitchenScreen() {
 
     isUpdating.current = true;
     setBusyId(id);
+
+    recentlyCompletedIds.current.delete(String(id));
 
     const { error } = await supabase.from("orders").update({ status: "pending" }).eq("id", id);
     setBusyId(null);
