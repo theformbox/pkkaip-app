@@ -421,7 +421,11 @@ function OrderSummaryScreen({ cafeHeaderTitle, total, orderItems, onBackToMenu, 
             }}
           >
             {item.image
-              ? <img src={item.image} alt="" style={{ width: 64, height: 64, borderRadius: 12, objectFit: "cover", flexShrink: 0 }} onError={(e) => { e.target.style.display = "none"; }} />
+              ? (
+                <div style={{ width: 64, height: 64, borderRadius: 12, background: "#f5f5f5", flexShrink: 0, overflow: "hidden", display: "flex", alignItems: "center", justifyContent: "center" }}>
+                  <img src={item.image} alt="" style={{ width: "100%", height: "100%", objectFit: "contain" }} onError={(e) => { e.target.style.display = "none"; }} />
+                </div>
+              )
               : <div style={{ width: 64, height: 64, borderRadius: 12, background: G.greenPale, flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 24 }}>☕</div>}
             <div style={{ flex: 1, minWidth: 0 }}>
               <div style={{ fontSize: 16, fontWeight: "bold", color: G.text, fontFamily: "Georgia,serif" }}>{item.name}</div>
@@ -800,7 +804,11 @@ function CafeScreen({ onBack, categories, setCategories, logo }) {
               }}
             >
               {item.image
-                ? <img src={item.image} alt="" style={{ width: 56, height: 56, borderRadius: 10, objectFit: "cover", flexShrink: 0 }} onError={e => { e.target.style.display = "none"; }} />
+                ? (
+                  <div style={{ width: 56, height: 56, borderRadius: 10, background: "#f5f5f5", flexShrink: 0, overflow: "hidden", display: "flex", alignItems: "center", justifyContent: "center" }}>
+                    <img src={item.image} alt="" style={{ width: "100%", height: "100%", objectFit: "contain" }} onError={e => { e.target.style.display = "none"; }} />
+                  </div>
+                )
                 : <div style={{ width: 56, height: 56, borderRadius: 10, background: G.greenPale, flexShrink: 0 }} />}
               <div style={{ flex: 1 }}>
                 <div style={{ fontSize: 15, fontWeight: "bold", color: G.text }}>{item.name}</div>
@@ -942,7 +950,6 @@ function CafeScreen({ onBack, categories, setCategories, logo }) {
                 flexDirection: "column",
                 alignItems: "stretch",
                 overflow: "visible",
-                minHeight: hasImg ? 138 : undefined,
                 opacity: soldOut ? 0.55 : 1,
               }}
             >
@@ -976,22 +983,27 @@ function CafeScreen({ onBack, categories, setCategories, logo }) {
                 <div
                   style={{
                     position: "relative",
-                    height: 92,
+                    width: "100%",
+                    aspectRatio: "1",
                     flexShrink: 0,
                     borderRadius: "16px 16px 0 0",
                     overflow: "hidden",
+                    background: "#f5f5f5",
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
                   }}
                 >
-                  <div
-                    aria-hidden
+                  <img
+                    src={item.image}
+                    alt=""
                     style={{
+                      width: "100%",
                       height: "100%",
-                      backgroundImage: `url(${item.image})`,
-                      backgroundSize: "cover",
-                      backgroundPosition: "center",
-                      backgroundRepeat: "no-repeat",
+                      objectFit: "contain",
                       filter: soldOut ? "grayscale(1)" : undefined,
                     }}
+                    onError={(e) => { e.target.style.display = "none"; }}
                   />
                   {!soldOut && qty > 0 && (
                     <div
@@ -1165,6 +1177,8 @@ async function getCroppedImgDataUrl(imageSrc, pixelCrop) {
 // ══════════════════════════════════════════════════════════════
 
 function ImagePicker({ searchLabel, unsplashQuery, aspectRatio = 1, onSelect, onClose }) {
+  const squareMenuCrop = aspectRatio === 1;
+
   const [phase, setPhase] = useState("pick");
   const [cropSrc, setCropSrc] = useState(null);
   const [crop, setCrop] = useState({ x: 0, y: 0 });
@@ -1291,8 +1305,25 @@ function ImagePicker({ searchLabel, unsplashQuery, aspectRatio = 1, onSelect, on
             <div style={{ fontSize: 16, fontWeight: "bold", fontFamily: "Georgia,serif", color: G.text }}>Crop photo</div>
             <button type="button" onClick={onClose} style={{ background: G.greenPale, border: "none", borderRadius: 8, padding: "4px 10px", cursor: "pointer", color: G.green, fontWeight: "bold", fontSize: 16 }}>✕</button>
           </div>
-          <div style={{ position: "relative", width: "100%", flex: 1, minHeight: 280, maxHeight: "56vh", background: "#1a1a1a", borderRadius: 12, overflow: "hidden" }}>
+          <div
+            style={{
+              position: "relative",
+              width: "100%",
+              flex: 1,
+              minHeight: 280,
+              maxHeight: "56vh",
+              borderRadius: 12,
+              overflow: "hidden",
+              /* Checkerboard so letterboxing inside the crop reads clearly (not “more black”). */
+              backgroundColor: "#e4e4e4",
+              backgroundImage:
+                "linear-gradient(45deg, #cfcfcf 25%, transparent 25%), linear-gradient(-45deg, #cfcfcf 25%, transparent 25%), linear-gradient(45deg, transparent 75%, #cfcfcf 75%), linear-gradient(-45deg, transparent 75%, #cfcfcf 75%)",
+              backgroundSize: "16px 16px",
+              backgroundPosition: "0 0, 0 8px, 8px -8px, -8px 0px",
+            }}
+          >
             <Cropper
+              key={cropSrc}
               image={cropSrc}
               crop={crop}
               zoom={zoom}
@@ -1300,12 +1331,31 @@ function ImagePicker({ searchLabel, unsplashQuery, aspectRatio = 1, onSelect, on
               onCropChange={setCrop}
               onZoomChange={setZoom}
               onCropComplete={onCropComplete}
+              style={{
+                cropAreaStyle: {
+                  border: "3px solid rgba(255,255,255,0.98)",
+                  boxShadow: "0 0 0 9999px rgba(0,0,0,0.62)",
+                  color: "rgba(0,0,0,0.62)",
+                },
+                mediaStyle: {
+                  boxShadow: "0 4px 24px rgba(0,0,0,0.35)",
+                },
+              }}
+              {...(squareMenuCrop
+                ? {
+                    initialCroppedAreaPercentages: { x: 0, y: 0, width: 100, height: 100 },
+                    minZoom: 0.5,
+                    restrictPosition: false,
+                  }
+                : {})}
             />
           </div>
-          <div style={{ fontSize: 11, color: G.textLight, fontStyle: "italic", textAlign: "center", marginTop: 10, marginBottom: 6 }}>Pinch or use scroll to zoom · drag to reposition</div>
+          <div style={{ fontSize: 11, color: G.textLight, fontStyle: "italic", textAlign: "center", marginTop: 10, marginBottom: 6 }}>
+            The area inside the bright square is what appears on the menu card. Pinch or scroll to zoom · drag to move the photo.
+          </div>
           <input
             type="range"
-            min={1}
+            min={squareMenuCrop ? 0.5 : 1}
             max={3}
             step={0.01}
             value={zoom}
@@ -1827,7 +1877,30 @@ function MenuAdmin({ categories, setCategories, onBack }) {
         <label style={lbl}>Price (RM)</label>
         <input style={inp} type="number" inputMode="decimal" value={itemForm.price} onChange={e => setItemForm(f => ({ ...f, price: e.target.value }))} placeholder="e.g. 5.00" />
         <label style={lbl}>Photo</label>
-        {itemForm.image && <img src={itemForm.image} alt="" style={{ width: "100%", height: 160, objectFit: "cover", borderRadius: 12, marginBottom: 10 }} onError={e => { e.target.style.display = "none"; }} />}
+        {itemForm.image && (
+          <div
+            style={{
+              width: "100%",
+              maxWidth: 320,
+              aspectRatio: "1",
+              marginBottom: 10,
+              borderRadius: 12,
+              overflow: "hidden",
+              background: "#f5f5f5",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              border: `1px solid ${G.greenPale}`,
+            }}
+          >
+            <img
+              src={itemForm.image}
+              alt=""
+              style={{ width: "100%", height: "100%", objectFit: "contain" }}
+              onError={(e) => { e.target.style.display = "none"; }}
+            />
+          </div>
+        )}
         <button onClick={() => itemForm.name.trim() ? setShowPicker(true) : alert("Please enter the item name first so we can find photos for it!")}
           style={{ width: "100%", padding: "13px", borderRadius: 12, border: `2px dashed ${G.green}`, background: G.greenPale, color: G.green, fontSize: 14, cursor: "pointer", marginBottom: 20, fontFamily: "Georgia,serif" }}>
           {itemForm.image ? "🔄 Change Photo" : "📷 Choose Photo"}
