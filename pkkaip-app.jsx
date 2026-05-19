@@ -976,7 +976,6 @@ function CafeScreen({ onBack, categories, setCategories, logo }) {
                 flexDirection: "column",
                 alignItems: "stretch",
                 overflow: "visible",
-                minHeight: hasImg ? 138 : undefined,
                 opacity: soldOut ? 0.55 : 1,
               }}
             >
@@ -1009,23 +1008,27 @@ function CafeScreen({ onBack, categories, setCategories, logo }) {
               {hasImg && (
                 <div
                   style={{
+                    width: "100%",
+                    paddingBottom: "100%",
                     position: "relative",
-                    height: 92,
-                    flexShrink: 0,
-                    borderRadius: "16px 16px 0 0",
                     overflow: "hidden",
+                    borderRadius: "12px 12px 0 0",
                   }}
                 >
-                  <div
-                    aria-hidden
+                  <img
+                    src={item.image}
+                    alt=""
                     style={{
+                      position: "absolute",
+                      top: 0,
+                      left: 0,
+                      width: "100%",
                       height: "100%",
-                      backgroundImage: `url(${item.image})`,
-                      backgroundSize: "cover",
-                      backgroundPosition: "center",
-                      backgroundRepeat: "no-repeat",
+                      objectFit: "contain",
+                      background: "#f5f5f5",
                       filter: soldOut ? "grayscale(1)" : undefined,
                     }}
+                    onError={(e) => { e.target.style.display = "none"; }}
                   />
                   {!soldOut && qty > 0 && (
                     <div
@@ -1138,10 +1141,28 @@ function GardenScreen({ onBack, plants }) {
           </div>
         ) : plants.map(p => (
           <button key={p.id} onClick={() => setSelected(p)} style={{ width: "100%", background: G.white, borderRadius: 16, border: `1px solid ${G.greenPale}`, cursor: "pointer", marginBottom: 12, overflow: "hidden", boxShadow: "0 2px 8px rgba(0,0,0,0.06)", display: "flex", alignItems: "center", textAlign: "left" }}>
-            {p.image
-              ? <img src={p.image} alt={p.name} style={{ width: 80, height: 80, objectFit: "cover", flexShrink: 0 }} onError={e => e.target.style.display = "none"} />
-              : <div style={{ width: 80, height: 80, background: G.greenPale, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 30, flexShrink: 0 }}>🌿</div>
-            }
+            {p.image ? (
+              <div
+                style={{
+                  width: 80,
+                  height: 80,
+                  flexShrink: 0,
+                  position: "relative",
+                  overflow: "hidden",
+                  borderRadius: 12,
+                  background: "#f5f5f5",
+                }}
+              >
+                <img
+                  src={p.image}
+                  alt={p.name}
+                  style={{ position: "absolute", top: 0, left: 0, width: "100%", height: "100%", objectFit: "contain" }}
+                  onError={(e) => { e.target.style.display = "none"; }}
+                />
+              </div>
+            ) : (
+              <div style={{ width: 80, height: 80, background: G.greenPale, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 30, flexShrink: 0 }}>🌿</div>
+            )}
             <div style={{ padding: "10px 14px" }}>
               <div style={{ fontSize: 16, fontWeight: "bold", color: G.green, fontFamily: "Georgia,serif", marginBottom: 2 }}>{p.name}</div>
               {p.malay && <div style={{ fontSize: 11, color: G.brownLight, fontStyle: "italic", marginBottom: 4 }}>{p.malay}</div>}
@@ -1619,7 +1640,27 @@ function PlantAdmin({ plants, setPlants, onBack }) {
         <textarea style={{ ...inp, height: 70, resize: "none" }} value={form.uses} onChange={ff("uses")} placeholder="e.g. Used in cooking and herbal medicine." />
 
         <label style={lbl}>Photo</label>
-        {form.image && <img src={form.image} alt="" style={{ width: "100%", height: 160, objectFit: "cover", borderRadius: 12, marginBottom: 10 }} onError={e => e.target.style.display = "none"} />}
+        {form.image && (
+          <div
+            style={{
+              position: "relative",
+              width: "100%",
+              height: 160,
+              marginBottom: 10,
+              borderRadius: 12,
+              overflow: "hidden",
+              background: "#f5f5f5",
+              border: `1px solid ${G.greenPale}`,
+            }}
+          >
+            <img
+              src={form.image}
+              alt=""
+              style={{ position: "absolute", top: 0, left: 0, width: "100%", height: "100%", objectFit: "contain" }}
+              onError={(e) => { e.target.style.display = "none"; }}
+            />
+          </div>
+        )}
         <button onClick={() => form.name.trim() ? setShowPicker(true) : alert("Please enter the plant name first so we can find photos for it!")}
           style={{ width: "100%", padding: "13px", borderRadius: 12, border: `2px dashed ${G.green}`, background: G.greenPale, color: G.green, fontSize: 14, cursor: "pointer", marginBottom: 20, fontFamily: "Georgia,serif" }}>
           {form.image ? "🔄 Change Photo" : "📷 Choose Photo"}
@@ -1676,10 +1717,27 @@ function PlantAdmin({ plants, setPlants, onBack }) {
                           onClick={() => openEdit(p)}
                           style={{ flex: 1, display: "flex", alignItems: "center", cursor: "pointer", background: "none", border: "none", textAlign: "left", padding: 0 }}
                         >
-                          {p.image
-                            ? <img src={p.image} alt="" style={{ width: 70, height: 70, objectFit: "cover", flexShrink: 0 }} onError={e => e.target.style.display = "none"} />
-                            : <div style={{ width: 70, height: 70, background: G.greenPale, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 26, flexShrink: 0 }}>🌿</div>
-                          }
+                          {p.image ? (
+                            <div
+                              style={{
+                                width: 70,
+                                height: 70,
+                                flexShrink: 0,
+                                position: "relative",
+                                overflow: "hidden",
+                                background: "#f5f5f5",
+                              }}
+                            >
+                              <img
+                                src={p.image}
+                                alt=""
+                                style={{ position: "absolute", top: 0, left: 0, width: "100%", height: "100%", objectFit: "contain" }}
+                                onError={(e) => { e.target.style.display = "none"; }}
+                              />
+                            </div>
+                          ) : (
+                            <div style={{ width: 70, height: 70, background: G.greenPale, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 26, flexShrink: 0 }}>🌿</div>
+                          )}
                           <div style={{ padding: "10px 12px" }}>
                             <div style={{ fontSize: 15, fontWeight: "bold", color: G.green, fontFamily: "Georgia,serif" }}>{p.name}</div>
                             {p.malay && <div style={{ fontSize: 11, color: G.brownLight, fontStyle: "italic" }}>{p.malay}</div>}
@@ -1903,7 +1961,27 @@ function MenuAdmin({ categories, setCategories, onBack }) {
         <label style={lbl}>Price (RM)</label>
         <input style={inp} type="number" inputMode="decimal" value={itemForm.price} onChange={e => setItemForm(f => ({ ...f, price: e.target.value }))} placeholder="e.g. 5.00" />
         <label style={lbl}>Photo</label>
-        {itemForm.image && <img src={itemForm.image} alt="" style={{ width: "100%", height: 160, objectFit: "cover", borderRadius: 12, marginBottom: 10 }} onError={e => { e.target.style.display = "none"; }} />}
+        {itemForm.image && (
+          <div
+            style={{
+              position: "relative",
+              width: "100%",
+              height: 160,
+              marginBottom: 10,
+              borderRadius: 12,
+              overflow: "hidden",
+              background: "#f5f5f5",
+              border: `1px solid ${G.greenPale}`,
+            }}
+          >
+            <img
+              src={itemForm.image}
+              alt=""
+              style={{ position: "absolute", top: 0, left: 0, width: "100%", height: "100%", objectFit: "contain" }}
+              onError={(e) => { e.target.style.display = "none"; }}
+            />
+          </div>
+        )}
         <button onClick={() => itemForm.name.trim() ? setShowPicker(true) : alert("Please enter the item name first so we can find photos for it!")}
           style={{ width: "100%", padding: "13px", borderRadius: 12, border: `2px dashed ${G.green}`, background: G.greenPale, color: G.green, fontSize: 14, cursor: "pointer", marginBottom: 20, fontFamily: "Georgia,serif" }}>
           {itemForm.image ? "🔄 Change Photo" : "📷 Choose Photo"}
